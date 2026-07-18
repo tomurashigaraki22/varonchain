@@ -1,150 +1,66 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { extractScore, extractPhase, type SoccerScore } from "@/lib/txline/scoreSoccer";
 
 type RawScoreEvent = Record<string, unknown>;
-
-function asNumber(v: unknown): number | undefined {
-  if (typeof v === "number") return v;
-  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) return Number(v);
-  return undefined;
-}
-
-/**
- * Extract goal count for one participant.
- *
- * Sums H1 + H2 + ET periods rather than trusting Total.Goals, because the
- * snapshot's Total can reflect mid-match state after a discarded goal.
- * The period-by-period sum is always accurate.
- */
-function goalsFromParticipant(p: Record<string, unknown> | undefined): number | undefined {
-  if (!p || typeof p !== "object") return undefined;
-
-  // Sum all known period keys — this is always accurate
-  let sum = 0;
-  let found = false;
-  for (const key of ["H1", "H2", "ET1", "ET2", "P"]) {
-    const period = p[key] as Record<string, unknown> | undefined;
-    const g = asNumber(period?.Goals);
-    if (g != null) { sum += g; found = true; }
-  }
-  if (found) return sum;
-
-  // Fallback to Total.Goals only if no period data at all
-  const total = p.Total as Record<string, unknown> | undefined;
-  const fromTotal = asNumber(total?.Goals);
-  if (fromTotal != null) return fromTotal;
-
-  return undefined;
-}
-
-/**
- * Scan an array of TxLINE score events and return the definitive final score.
- *
- * Priority:
- *   1. The `game_finalised` event's Score (authoritative end-of-match total)
- *   2. The `halftime_finalised` event's Score (for half-time display)
- *   3. The most recent event that carries a Score with Goals data
- *
- * We sum H1 + H2 (+ ET periods) from the Score object rather than trusting
- * Total.Goals, because the snapshot may carry a mid-game Total that hasn't
- * been rolled back after a discarded goal.
- */
-function extractScore(events: RawScoreEvent[]): { home?: number; away?: number } {
-  // Pass 1: look for game_finalised with a Score (highest priority)
-  for (let i = events.length - 1; i >= 0; i--) {
-    const raw = events[i];
-    const action = String(raw.Action ?? raw.action ?? "").toLowerCase();
-    if (action !== "game_finalised" && action !== "halftime_finalised") continue;
-    const scoreObj = (raw.Score ?? raw.score) as Record<string, unknown> | undefined;
-    if (!scoreObj) continue;
-    const p1 = scoreObj.Participant1 as Record<string, unknown> | undefined;
-    const p2 = scoreObj.Participant2 as Record<string, unknown> | undefined;
-    const home = goalsFromParticipant(p1);
-    const away = goalsFromParticipant(p2);
-    if (home != null || away != null) return { home: home ?? 0, away: away ?? 0 };
-  }
-
-  // Pass 2: most recent event with a Score
-  for (let i = events.length - 1; i >= 0; i--) {
-    const raw = events[i];
-    const scoreObj = (raw.Score ?? raw.score) as Record<string, unknown> | undefined;
-    if (!scoreObj || typeof scoreObj !== "object") continue;
-    const p1 = scoreObj.Participant1 as Record<string, unknown> | undefined;
-    const p2 = scoreObj.Participant2 as Record<string, unknown> | undefined;
-    const home = goalsFromParticipant(p1);
-    const away = goalsFromParticipant(p2);
-    if (home != null || away != null) return { home: home ?? 0, away: away ?? 0 };
-  }
-
-  return {};
-}
-
-function latestPhase(events: RawScoreEvent[]): { label: string; live: boolean } | null {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const raw = events[i];
-    const action = String(raw.Action ?? raw.action ?? "").toLowerCase();
-    // game_finalised (statusId=100) is the definitive end-of-match record
-    if (action === "game_finalised" || action.includes("game_final")) return { label: "Full time", live: false };
-    if (action.includes("final")) return { label: "Full time", live: false };
-    if (action === "halftime_finalised" || action.includes("halftime_final")) return { label: "Half time", live: false };
-    if (action.includes("half")) return { label: "Half time", live: false };
-    if (action.includes("kickoff") || action.includes("start")) return { label: "In play", live: true };
-    // status events carry StatusId — H1=2, H2=4 = in play; HT=3 = halftime; F=5 = finished
-    if (action === "status") {
-      const sid = Number((raw.Data as Record<string, unknown> | undefined)?.StatusId ?? raw.StatusId ?? 0);
-      if (sid === 5 || sid === 10 || sid === 13) return { label: "Full time", live: false };
-      if (sid === 3 || sid === 8) return { label: "Half time", live: false };
-      if (sid === 2 || sid === 4 || sid === 7 || sid === 9) return { label: "In play", live: true };
-    }
-  }
-  return null;
-}
 
 export function MatchHeader({
   label,
   fixtureId,
-  fixture,
   events,
 }: {
   label: string;
   fixtureId?: number;
-  /** The raw fixture object — carries Participant1Score/Participant2Score for finished matches */
-  fixture?: Record<string, unknown>;
   events: RawScoreEvent[];
 }) {
   const parts = label.split(" vs ");
   const home = parts[0] ?? "Home";
   const away = parts[1] ?? "Away";
 
-  // Score from live events (goal counts from Score.ParticipantN.Total.Goals)
+  // Score from live events (goal counts from ScoreSoccer.ParticipantN)
   const eventScore = extractScore(events);
 
   // Snapshot fallback — same extraction applied to the scores/snapshot response
-  const [snapshotScore, setSnapshotScore] = useState<{ home?: number; away?: number } | null>(null);
+  const [snapshotScore, setSnapshotScore] = useState<SoccerScore | null>(null);
 
   useEffect(() => {
     if (!fixtureId) return;
     let cancelled = false;
-    fetch(`/api/txline/proxy/scores/snapshot/${fixtureId}`)
-      .then((r) => r.json())
-      .then((data: unknown) => {
-        if (cancelled) return;
-        const items = Array.isArray(data) ? data : [data];
-        const extracted = extractScore(items as RawScoreEvent[]);
-        if (extracted.home != null || extracted.away != null) {
-          setSnapshotScore(extracted);
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
+
+    const fetchSnapshot = () => {
+      fetch(`/api/txline/proxy/scores/snapshot/${fixtureId}`)
+        .then((r) => r.json())
+        .then((data: unknown) => {
+          if (cancelled) return;
+          const items = Array.isArray(data) ? data : [data];
+          const extracted = extractScore(items as RawScoreEvent[]);
+          // Always update — even 0:0 is valid
+          if (extracted.home != null || extracted.away != null) {
+            setSnapshotScore(extracted);
+          }
+        })
+        .catch(() => {});
+    };
+
+    fetchSnapshot();
+
+    // Poll every 30s for live matches (phase will be live if kickoff/start seen)
+    const interval = setInterval(fetchSnapshot, 30_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [fixtureId]);
 
-  // Priority: live event stream > snapshot
-  const { home: homeScore, away: awayScore } =
-    (eventScore.home != null || eventScore.away != null) ? eventScore : (snapshotScore ?? {});
-
-  const phase = latestPhase(events);
+  // For live matches: snapshot (polling) is more reliable than event stream
+  // For finished matches: event stream score (from history backfill) is authoritative
+  const phase = extractPhase(events);
+  const isLive = phase?.live ?? false;
+  const { home: homeScore, away: awayScore } = isLive
+    ? (snapshotScore ?? eventScore)
+    : ((eventScore.home != null || eventScore.away != null) ? eventScore : (snapshotScore ?? {}));
 
   return (
     <div className="relative overflow-hidden border-b border-border bg-dot-grid">

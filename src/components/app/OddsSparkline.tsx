@@ -49,7 +49,13 @@ export function OddsSparkline({ fixtureId }: { fixtureId: number }) {
   useEffect(() => {
     let cancelled = false;
     lockedNamesRef.current = null;
-    if (!cancelled) { setSeries([]); setMarketLabel(null); }
+
+    Promise.resolve().then(() => {
+      if (!cancelled) {
+        setSeries([]);
+        setMarketLabel(null);
+      }
+    });
 
     const es = new EventSource("/api/txline/stream/odds");
     es.onopen = () => { if (!cancelled) setConnected(true); };

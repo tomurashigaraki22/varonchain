@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { useNow } from "@/lib/hooks/useNow";
 import { Icon } from "@/components/ui/Icon";
 import {
   FootballIcon,
@@ -11,8 +12,6 @@ import {
   Medal01Icon,
   CrownIcon,
   Award01Icon,
-  UserCheck01Icon,
-  CheckmarkCircle01Icon,
 } from "@hugeicons/core-free-icons";
 
 type PredictionType = "goal" | "card" | "corner" | "penalty";
@@ -53,16 +52,16 @@ function truncate(address: string) {
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
 }
 
-function timeAgo(ts: number) {
-  const diffS = Math.floor((Date.now() - ts) / 1000);
+function timeAgo(ts: number, now: number) {
+  const diffS = Math.floor((now - ts) / 1000);
   if (diffS < 60) return `${diffS}s ago`;
   return `${Math.floor(diffS / 60)}m ago`;
 }
 
-function PredictionBadge({ p }: { p: Prediction }) {
+function PredictionBadge({ p, now }: { p: Prediction; now: number }) {
   const opt = PREDICTION_OPTIONS.find((o) => o.type === p.type);
   const pending = p.resolvedCorrect == null;
-  const expired = pending && Date.now() - p.ts > PREDICTION_TTL_MS;
+  const expired = pending && now - p.ts > PREDICTION_TTL_MS;
 
   return (
     <div
@@ -81,7 +80,7 @@ function PredictionBadge({ p }: { p: Prediction }) {
           ? "+10 pts"
           : p.resolvedCorrect === false || expired
           ? "—"
-          : timeAgo(p.ts)}
+          : timeAgo(p.ts, now)}
       </span>
     </div>
   );
@@ -98,28 +97,38 @@ export function PredictionGame({
 }) {
   const { publicKey } = useWallet();
   const wallet = publicKey?.toBase58() ?? null;
+  const now = useNow();
 
   const [myPredictions, setMyPredictions] = useState<Prediction[]>([]);
+  const [allPredictions, setAllPredictions] = useState<Prediction[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [cooldown, setCooldown] = useState(false);
-  const [tab, setTab] = useState<"predict" | "leaderboard">("predict");
+  const [tab, setTab] = useState<"predict" | "arena" | "leaderboard">("predict");
   const lastResolvedAction = useRef<string | null>(null);
 
-  // Fetch predictions on mount and on fixture change
+  // Fetch predictions on mount and on fixture change, then poll so the
+  // Arena (everyone's live calls, not just mine) stays fresh.
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/txline/predictions?fixtureId=${fixtureId}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        setMyPredictions(
-          (data.predictions as Prediction[]).filter((p) => p.wallet === wallet)
-        );
-        setLeaderboard(data.leaderboard ?? []);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
+    const load = () => {
+      fetch(`/api/txline/predictions?fixtureId=${fixtureId}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (cancelled) return;
+          const all = (data.predictions as Prediction[]) ?? [];
+          setAllPredictions(all);
+          setMyPredictions(all.filter((p) => p.wallet === wallet));
+          setLeaderboard(data.leaderboard ?? []);
+        })
+        .catch(() => {});
+    };
+    load();
+    const interval = setInterval(load, 8_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [fixtureId, wallet]);
 
   // Auto-resolve pending predictions when a matching event arrives
@@ -177,12 +186,16 @@ export function PredictionGame({
   };
 
   const pending = myPredictions.filter(
-    (p) => p.resolvedCorrect == null && Date.now() - p.ts <= PREDICTION_TTL_MS
+    (p) => p.resolvedCorrect == null && now - p.ts <= PREDICTION_TTL_MS
   );
   const myPoints = myPredictions.reduce(
     (acc, p) => acc + (p.resolvedCorrect === true ? 10 : 0),
     0
   );
+  // Arena — everyone's live in-flight calls right now, not just mine.
+  const arena = allPredictions
+    .filter((p) => p.resolvedCorrect == null && now - p.ts <= PREDICTION_TTL_MS)
+    .sort((a, b) => b.ts - a.ts);
 
   return (
     <div className="border-t border-border">
@@ -205,7 +218,7 @@ export function PredictionGame({
 
       {/* Tab switcher */}
       <div className="flex border-b border-border">
-        {(["predict", "leaderboard"] as const).map((t) => (
+        {(["predict", "arena", "leaderboard"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -215,13 +228,44 @@ export function PredictionGame({
                 : "text-text-dimmer hover:text-text-dim"
             }`}
           >
-            {t === "predict" ? "Make a prediction" : "Leaderboard"}
+            {t === "predict" ? "Predict" : t === "arena" ? `Arena${arena.length ? ` (${arena.length})` : ""}` : "Leaderboard"}
           </button>
         ))}
       </div>
 
       <div className="px-4 py-4 sm:px-6">
-        {tab === "predict" ? (
+        {tab === "arena" ? (
+          /* Arena tab — everyone's live pending calls, wallet vs wallet */
+          arena.length === 0 ? (
+            <p className="text-center text-xs text-text-dim">
+              No live calls right now — be the first to predict.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1.5">
+              {arena.map((p) => {
+                const opt = PREDICTION_OPTIONS.find((o) => o.type === p.type);
+                const isMe = p.wallet === wallet;
+                const secsLeft = Math.max(0, Math.ceil((PREDICTION_TTL_MS - (now - p.ts)) / 1000));
+                return (
+                  <li
+                    key={p.id}
+                    className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 text-xs ${
+                      isMe ? "border-accent/25 bg-accent-dim" : "border-border bg-surface"
+                    }`}
+                  >
+                    <span className="flex h-5 w-5 items-center justify-center" aria-hidden>
+                      {opt?.icon}
+                    </span>
+                    <span className={`flex-1 truncate font-mono ${isMe ? "text-accent" : "text-text-dim"}`}>
+                      {isMe ? "You" : truncate(p.wallet)} called {opt?.label ?? p.type}
+                    </span>
+                    <span className="shrink-0 font-mono text-[10px] text-text-dimmer">{secsLeft}s</span>
+                  </li>
+                );
+              })}
+            </ul>
+          )
+        ) : tab === "predict" ? (
           <>
             {!wallet ? (
               <p className="text-center text-xs text-text-dim">
@@ -241,7 +285,7 @@ export function PredictionGame({
                     </p>
                     <div className="flex flex-col gap-1.5">
                       {myPredictions.slice(0, 5).map((p) => (
-                        <PredictionBadge key={p.id} p={p} />
+                        <PredictionBadge key={p.id} p={p} now={now} />
                       ))}
                     </div>
                   </div>
@@ -294,7 +338,7 @@ export function PredictionGame({
                     </p>
                     <div className="flex flex-col gap-1.5">
                       {myPredictions.slice(0, 5).map((p) => (
-                        <PredictionBadge key={p.id} p={p} />
+                        <PredictionBadge key={p.id} p={p} now={now} />
                       ))}
                     </div>
                   </div>

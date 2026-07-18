@@ -17,7 +17,10 @@ export function SolanaProviders({ children }: { children: React.ReactNode }) {
   const wallets = useMemo(() => [], []);
 
   return (
-    <ConnectionProvider endpoint={TXLINE_CONFIG.rpcUrl}>
+    <ConnectionProvider
+      endpoint={TXLINE_CONFIG.rpcUrl}
+      config={{ wsEndpoint: TXLINE_CONFIG.wsRpcUrl }}
+    >
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>{children}</WalletModalProvider>
       </WalletProvider>

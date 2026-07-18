@@ -2,6 +2,10 @@
 
 import { useEffect, useState } from "react";
 
+// Shape per the TxLINE API reference for /api/fixtures/snapshot — it carries
+// no status or score fields. Live/finished status and scores must be read
+// per-fixture from /api/scores/snapshot/{fixtureId} instead (see
+// src/lib/txline/scoreSoccer.ts, used by FixtureList and MatchHeader).
 export type Fixture = {
   FixtureId?: number;
   Id?: number;
@@ -13,14 +17,6 @@ export type Fixture = {
   Away?: string;
   StartTime?: number | string;
   StartDate?: string;
-  GameState?: number;
-  // Score fields that may be present on the fixture object itself
-  Participant1Score?: number | string;
-  Participant2Score?: number | string;
-  HomeScore?: number | string;
-  AwayScore?: number | string;
-  Score1?: number | string;
-  Score2?: number | string;
   [key: string]: unknown;
 };
 
@@ -77,36 +73,32 @@ export function useFixtures(active: boolean) {
           const raw: Fixture[] = Array.isArray(data) ? data : (data?.fixtures ?? []);
           const now = Date.now();
 
+          // The fixtures/snapshot endpoint carries no live/finished status field
+          // (confirmed against the TxLINE API reference — it returns only
+          // Ts/StartTime/Competition/Participant fields), so status here is
+          // approximated purely from StartTime vs now. Real per-fixture
+          // live/finished state and scores come from scores/snapshot instead
+          // (see FixtureList / MatchHeader).
+          const LIKELY_LIVE_WINDOW = 3 * 60 * 60 * 1000; // regulation + ET + stoppage buffer
           const sorted = [...raw].sort((a, b) => {
             const tsA = Number(a.StartTime ?? 0);
             const tsB = Number(b.StartTime ?? 0);
-            const gsA = Number(a.GameState ?? 1);
-            const gsB = Number(b.GameState ?? 1);
 
-            // GameState=1 = scheduled/not started; 5/10/13 = finished
-            const finishedStates = new Set([5, 10, 13]);
-            const doneA = finishedStates.has(gsA);
-            const doneB = finishedStates.has(gsB);
-            // "live" = not scheduled (gs≠1) and not finished
-            const liveA = gsA !== 1 && !doneA;
-            const liveB = gsB !== 1 && !doneB;
-            // "upcoming" = scheduled AND start time is in the future
-            const upcomingA = gsA === 1 && tsA > now;
-            const upcomingB = gsB === 1 && tsB > now;
+            const upcomingA = tsA > now;
+            const upcomingB = tsB > now;
 
             // 1st priority: upcoming (future kick-offs), soonest first
             if (upcomingA && !upcomingB) return -1;
             if (upcomingB && !upcomingA) return 1;
             if (upcomingA && upcomingB) return tsA - tsB;
 
-            // 2nd priority: live matches
+            // 2nd priority: likely still in progress (kicked off recently)
+            const liveA = now - tsA < LIKELY_LIVE_WINDOW;
+            const liveB = now - tsB < LIKELY_LIVE_WINDOW;
             if (liveA && !liveB) return -1;
             if (liveB && !liveA) return 1;
 
-            // 3rd priority: finished matches — most recent first
-            if (doneA && doneB) return tsB - tsA;
-
-            // Scheduled in the past (odd state) — treat like finished
+            // 3rd priority: finished — most recent kickoff first
             return tsB - tsA;
           });
           setFixtures(sorted);

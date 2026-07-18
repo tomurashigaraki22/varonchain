@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { ShareCardModal, type ShareableMoment } from "./ShareCardModal";
+import { scoreFromEvent, extractPhase } from "@/lib/txline/scoreSoccer";
+import { validateStatsOnChain, type StatValidationApiResponse } from "@/lib/txline/verify";
 import { Icon } from "@/components/ui/Icon";
 import {
   FootballIcon,
-  Alert01Icon,
   UserSwitchIcon,
   RacingFlagIcon,
   Timer01Icon,
@@ -61,19 +63,33 @@ function parseEvent(raw: RawEvent, idx: number): ScoreEvent {
   };
 }
 
-/** Match minute from Clock.Seconds + StatusId */
+/**
+ * Match minute from Clock.Seconds + StatusId.
+ *
+ * Confirmed against real captured data: Clock.Seconds is a SINGLE
+ * continuously-incrementing elapsed-seconds counter for the whole match —
+ * it starts at 0 at kickoff, reaches exactly 2700 (45:00) at halftime, and
+ * keeps climbing through the second half (H2's own kickoff event already
+ * carries Seconds:2700, it does not reset to 0). So the match minute is
+ * simply floor(seconds/60) — no per-half offset/length reconstruction
+ * needed, and the whole-game (not "half half") minute the docs table alone
+ * doesn't make obvious.
+ *
+ * StatusId values per the TxLINE Soccer Feed "Game Phase Encoding" table
+ * (docs): NS=1, H1=2, HT=3, H2=4, F=5, WET=6 (waiting for ET — a break, not
+ * play), ET1=7, HTET=8 (ET half time — a break), ET2=9, FET=10, WPE=11
+ * (waiting for penalties — a break), PE=12, FPE=13. Only H1/H2/ET1/ET2/PE
+ * are active play periods with a running clock; everything else is a break
+ * or terminal state and has no meaningful match-minute.
+ */
 function clockMin(raw: RawEvent): string | null {
   const clk = raw.Clock as Record<string, unknown> | undefined;
   if (!clk) return null;
   const secs = num(clk.Seconds);
-  if (secs == null) return null;
+  if (secs == null || secs < 0) return null;
   const sid = num(raw.StatusId);
-  let offset = 0, len = 45 * 60;
-  if (sid === 4) offset = 45;
-  else if (sid === 6) { offset = 90; len = 15 * 60; }
-  else if (sid === 7) { offset = 105; len = 15 * 60; }
-  else if (sid !== 2) return null;
-  const min = offset + Math.max(1, Math.ceil((len - secs) / 60));
+  if (sid !== 2 && sid !== 4 && sid !== 7 && sid !== 9 && sid !== 12) return null;
+  const min = Math.floor(secs / 60) + 1;
   return `${min}'`;
 }
 
@@ -83,6 +99,13 @@ function tsMin(ts: number | undefined, start: number | undefined): string | null
   const min = Math.ceil((ts - start) / 60000);
   if (min <= 0 || min > 150) return null;
   return `${min}'`;
+}
+
+/** Real local wall-clock time for an event — always available, unlike the
+ * best-effort match-minute estimate, so it's shown alongside every row. */
+function wallClock(ts: number | undefined): string | null {
+  if (!ts) return null;
+  return new Date(ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
 function minute(evt: ScoreEvent, start?: number): string | null {
@@ -96,17 +119,18 @@ function team(raw: RawEvent, label: string): string | null {
   return p === 1 ? (parts[0] ?? "Home") : (parts[1] ?? "Away");
 }
 
+function teamSide(raw: RawEvent): "home" | "away" | null {
+  const p = num(raw.Participant ?? raw.participant);
+  if (p === 1) return "home";
+  if (p === 2) return "away";
+  return null;
+}
+
 /** Score at the moment of a goal event: "1 – 0" */
 function scoreAtGoal(raw: RawEvent): string | null {
-  const s = raw.Score as Record<string, unknown> | undefined;
-  if (!s) return null;
-  const p1 = s.Participant1 as Record<string, unknown> | undefined;
-  const p2 = s.Participant2 as Record<string, unknown> | undefined;
-  const g1 = num((p1?.Total as Record<string,unknown>|undefined)?.Goals)
-    ?? ([...(["H1","H2","ET1","ET2"] as const)].reduce((acc, k) => acc + (num((p1?.[k] as Record<string,unknown>|undefined)?.Goals) ?? 0), 0));
-  const g2 = num((p2?.Total as Record<string,unknown>|undefined)?.Goals)
-    ?? ([...(["H1","H2","ET1","ET2"] as const)].reduce((acc, k) => acc + (num((p2?.[k] as Record<string,unknown>|undefined)?.Goals) ?? 0), 0));
-  return `${g1} – ${g2}`;
+  const { home, away } = scoreFromEvent(raw);
+  if (home == null && away == null) return null;
+  return `${home ?? 0} – ${away ?? 0}`;
 }
 
 // ── Classification ────────────────────────────────────────────────────────────
@@ -158,7 +182,41 @@ type CardConfig = {
   verifiable: boolean;
 };
 
-function cardConfig(evt: ScoreEvent, fixtureLabel: string): CardConfig {
+/**
+ * var_end.Data.Outcome is only ever "Stands" or "Overturned" per the docs —
+ * it does NOT say what was under review. That comes from the Data.Type of
+ * the var event that started the review (Goal/Penalty/RedCard/
+ * SecondYellowCard/CornerKick/MistakenIdentity/Other). Find the nearest
+ * preceding "var" event by Ts (not array position — snapshot arrays aren't
+ * guaranteed ordered) to correlate them.
+ */
+function findVarReviewType(events: ScoreEvent[], varEndEvt: ScoreEvent): string | undefined {
+  const endTs = varEndEvt.ts ?? Infinity;
+  let best: ScoreEvent | undefined;
+  let bestTs = -Infinity;
+  for (const e of events) {
+    if ((e.action ?? "").toLowerCase() !== "var") continue;
+    const ts = e.ts ?? 0;
+    if (ts <= endTs && ts > bestTs) {
+      best = e;
+      bestTs = ts;
+    }
+  }
+  const data = best?.raw.Data as Record<string, unknown> | undefined;
+  return str(data?.Type ?? data?.type);
+}
+
+const VAR_TYPE_LABELS: Record<string, string> = {
+  goal: "Goal",
+  penalty: "Penalty",
+  redcard: "Red card",
+  secondyellowcard: "Second yellow card",
+  cornerkick: "Corner kick",
+  mistakenidentity: "Mistaken identity",
+  other: "Decision",
+};
+
+function cardConfig(evt: ScoreEvent, fixtureLabel: string, allEvents: ScoreEvent[] = []): CardConfig {
   const a = (evt.action ?? "").toLowerCase();
   const t = team(evt.raw, fixtureLabel);
   const data = evt.raw.Data as Record<string, unknown> | undefined;
@@ -177,12 +235,13 @@ function cardConfig(evt: ScoreEvent, fixtureLabel: string): CardConfig {
   }
 
   // ── Penalty outcome ────────────────────────────────────────────────────────
+  // Docs: penalty outcomes are exactly Scored, Missed, or Retake — there is
+  // no documented "Saved" value.
   if (a === "penalty_outcome") {
-    const outcome = str(data?.Outcome ?? data?.outcome ?? data?.Result ?? "")?.toLowerCase() ?? "";
-    const scored = outcome.includes("score") || outcome.includes("goal") || outcome === "converted" || outcome === "scored";
-    const saved  = outcome.includes("saved") || outcome.includes("save");
-    const missed = outcome.includes("miss");
-    const title = scored ? "Penalty scored" : saved ? "Penalty saved" : missed ? "Penalty missed" : "Penalty";
+    const outcome = str(data?.Outcome ?? data?.outcome ?? "")?.toLowerCase() ?? "";
+    const scored = outcome === "scored";
+    const retake = outcome === "retake";
+    const title = scored ? "Penalty scored" : retake ? "Penalty retaken" : "Penalty missed";
     return {
       icon: scored
         ? <Icon icon={FootballIcon} size={18} />
@@ -235,16 +294,18 @@ function cardConfig(evt: ScoreEvent, fixtureLabel: string): CardConfig {
   }
 
   // ── VAR end (decision) ─────────────────────────────────────────────────────
+  // Docs: var_end.Data.Outcome is only ever "Stands" or "Overturned" — the
+  // type of decision under review comes from the originating var event's
+  // Data.Type (Goal/Penalty/RedCard/SecondYellowCard/CornerKick/
+  // MistakenIdentity/Other), not from var_end itself.
   if (a === "var_end") {
-    const raw = str(data?.Decision ?? data?.Outcome ?? data?.Result ?? data?.VarDecision ?? "")?.toLowerCase() ?? "";
-    const title = raw.includes("no_goal") || raw.includes("cancelled") || raw.includes("disallow")
-      ? "VAR — Goal disallowed"
-      : raw.includes("goal") ? "VAR — Goal confirmed"
-      : raw.includes("red") ? "VAR — Red card"
-      : raw.includes("penalty") ? "VAR — Penalty awarded"
-      : raw.includes("overturn") ? "VAR — Decision overturned"
-      : raw ? `VAR — ${raw.replace(/_/g," ")}`
-      : "VAR — Decision";
+    const outcome = str(data?.Outcome ?? data?.outcome ?? "")?.toLowerCase() ?? "";
+    const overturned = outcome === "overturned";
+    const reviewTypeRaw = findVarReviewType(allEvents, evt);
+    const reviewLabel = reviewTypeRaw
+      ? VAR_TYPE_LABELS[reviewTypeRaw.toLowerCase()] ?? reviewTypeRaw
+      : "Decision";
+    const title = `VAR — ${reviewLabel} ${overturned ? "overturned" : "stands"}`;
     return {
       icon: <Icon icon={VideoReplayIcon} size={17} />,
       title,
@@ -267,13 +328,22 @@ function cardConfig(evt: ScoreEvent, fixtureLabel: string): CardConfig {
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 /** Horizontal divider: ─────  HALF TIME  ───── */
-function MarkerRow({ label, icon }: { label: string; icon: React.ReactNode }) {
+function MarkerRow({
+  label,
+  icon,
+  time,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  time?: string | null;
+}) {
   return (
     <li className="flex items-center gap-3 py-0.5" aria-label={label}>
       <div className="h-px flex-1 bg-border" />
       <span className="flex items-center gap-1.5 rounded-full border border-border bg-surface-2/80 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-text-dim">
         {icon}
         <span>{label}</span>
+        {time && <span className="text-text-dimmer">· {time}</span>}
       </span>
       <div className="h-px flex-1 bg-border" />
     </li>
@@ -282,17 +352,18 @@ function MarkerRow({ label, icon }: { label: string; icon: React.ReactNode }) {
 
 /** A single key event row in the timeline */
 function EventRow({
-  evt, fixtureLabel, matchStartTime,
+  evt, fixtureLabel, matchStartTime, allEvents,
   verifyState, verifyError, verifyResult,
   isExpanded, onVerify, onToggleExpand, onShare,
 }: {
-  evt: ScoreEvent; fixtureLabel: string; matchStartTime?: number;
+  evt: ScoreEvent; fixtureLabel: string; matchStartTime?: number; allEvents: ScoreEvent[];
   verifyState: VerifyState; verifyError: VerifyError; verifyResult?: VerifyResult;
   isExpanded: boolean;
   onVerify(): void; onToggleExpand(): void; onShare(): void;
 }) {
-  const cfg = cardConfig(evt, fixtureLabel);
+  const cfg = cardConfig(evt, fixtureLabel, allEvents);
   const min = minute(evt, matchStartTime);
+  const clock = wallClock(evt.ts);
   const verified = verifyState === "verified";
 
   // Container accent
@@ -340,46 +411,48 @@ function EventRow({
         {/* Middle: title + detail */}
         <div className="min-w-0 flex-1">
           <p className={`text-sm font-bold leading-tight ${titleColor}`}>{cfg.title}</p>
-          {cfg.detail && (
-            <p className="mt-0.5 truncate text-xs text-text-dim">{cfg.detail}</p>
+          {(cfg.detail || clock) && (
+            <p className="mt-0.5 truncate text-xs text-text-dim">
+              {[cfg.detail, clock].filter(Boolean).join("  ·  ")}
+            </p>
           )}
         </div>
 
-        {/* Right: verify button */}
-        {cfg.verifiable && (
-          <div className="shrink-0">
-            {verifyState === "idle" && (
-              <button onClick={onVerify}
-                className="rounded-full border border-border px-2.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-text-dimmer transition-colors hover:border-accent/40 hover:bg-accent-dim hover:text-accent">
-                Verify
-              </button>
-            )}
-            {verifyState === "checking" && (
-              <span className="flex items-center gap-1 rounded-full border border-warning/30 bg-warning/10 px-2.5 py-0.5 font-mono text-[9px] text-warning">
-                <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-warning border-t-transparent" />
-                Checking
-              </span>
-            )}
-            {verifyState === "verified" && (
-              <div className="flex items-center gap-1.5">
-                <button onClick={onShare}
-                  className="rounded-full border border-border px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-text-dimmer transition-colors hover:text-text">
-                  Share
+        {/* Right: share (always available) + verify state (when applicable) */}
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button onClick={onShare}
+            className="rounded-full border border-border px-2.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-text-dimmer transition-colors hover:border-accent/40 hover:bg-accent-dim hover:text-accent">
+            Share
+          </button>
+          {cfg.verifiable && (
+            <>
+              {verifyState === "idle" && (
+                <button onClick={onVerify}
+                  className="rounded-full border border-border px-2.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-text-dimmer transition-colors hover:border-accent/40 hover:bg-accent-dim hover:text-accent">
+                  Verify
                 </button>
+              )}
+              {verifyState === "checking" && (
+                <span className="flex items-center gap-1 rounded-full border border-warning/30 bg-warning/10 px-2.5 py-0.5 font-mono text-[9px] text-warning">
+                  <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-warning border-t-transparent" />
+                  Checking
+                </span>
+              )}
+              {verifyState === "verified" && (
                 <button onClick={onToggleExpand}
                   className="rounded-full border border-verified/30 bg-verified/10 px-2.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-verified transition-colors hover:bg-verified/20">
                   ✓ Verified
                 </button>
-              </div>
-            )}
-            {verifyState === "failed" && (
-              <span title={verifyError ?? "Failed"}
-                className="cursor-help rounded-full border border-danger/30 bg-danger/10 px-2.5 py-0.5 font-mono text-[9px] text-danger">
-                ✗ Failed
-              </span>
-            )}
-          </div>
-        )}
+              )}
+              {verifyState === "failed" && (
+                <span title={verifyError ?? "Failed"}
+                  className="cursor-help rounded-full border border-danger/30 bg-danger/10 px-2.5 py-0.5 font-mono text-[9px] text-danger">
+                  ✗ Failed
+                </span>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Proof drawer */}
@@ -405,7 +478,7 @@ function EventRow({
 
 export function EventFeed({
   fixtureId, fixtureLabel, matchStartTime,
-  onEventsChange, onLatestKeyAction, onMatchEnd,
+  onEventsChange, onLatestKeyAction, onMatchEnd, onGoal,
 }: {
   fixtureId: number;
   fixtureLabel: string;
@@ -413,7 +486,11 @@ export function EventFeed({
   onEventsChange?: (events: RawEvent[]) => void;
   onLatestKeyAction?: (action: string) => void;
   onMatchEnd?: () => void;
+  /** Fired only for goals arriving on the live stream (not history backfill). */
+  onGoal?: (payload: { side: "home" | "away" | null; teamName?: string; scoreLabel?: string }) => void;
 }) {
+  const { connection } = useConnection();
+  const wallet = useWallet();
   const [events, setEvents] = useState<ScoreEvent[]>([]);
   const [shareMoment, setShareMoment] = useState<ShareableMoment | null>(null);
   const [vstates, setVstates] = useState<Record<string, VerifyState>>({});
@@ -425,6 +502,12 @@ export function EventFeed({
   const idxRef = useRef(0);
 
   // ── verify ─────────────────────────────────────────────────────────────────
+  // The proof is fetched server-side (needs the activated session's cookies),
+  // but the actual on-chain validateStatV2 simulation runs client-side using
+  // the connected wallet as fee payer — Solana's simulator requires the fee
+  // payer to actually exist on-chain, which a server-side throwaway keypair
+  // never does. This will prompt a lightweight signature in the wallet (no
+  // real transaction is submitted or SOL spent — it's a read-only simulation).
   async function verify(evt: ScoreEvent) {
     if (evt.fixtureId == null || evt.seq == null) return;
     setVstates(s => ({ ...s, [evt.key]: "checking" }));
@@ -435,9 +518,13 @@ export function EventFeed({
         body: JSON.stringify({ fixtureId: evt.fixtureId, seq: evt.seq, statKeys: statKeys(evt.action) }),
       });
       const d = await res.json();
-      if (!res.ok) throw new Error(d?.error ?? "Failed");
-      setVresults(s => ({ ...s, [evt.key]: d }));
-      setVstates(s => ({ ...s, [evt.key]: d.verified ? "verified" : "failed" }));
+      if (!res.ok) throw new Error(d?.error ?? "Failed to fetch proof");
+
+      if (!wallet.connected) throw new Error("Connect a wallet to verify");
+      const result = await validateStatsOnChain(connection, wallet, d.proof as StatValidationApiResponse);
+
+      setVresults(s => ({ ...s, [evt.key]: result }));
+      setVstates(s => ({ ...s, [evt.key]: result.verified ? "verified" : "failed" }));
     } catch (e) {
       setVerrors(s => ({ ...s, [evt.key]: e instanceof Error ? e.message : "Failed" }));
       setVstates(s => ({ ...s, [evt.key]: "failed" }));
@@ -450,7 +537,11 @@ export function EventFeed({
     setEvents([]); setVstates({}); setVresults({}); setVerrors({});
     setLoadState("loading");
 
-    fetch(`/api/txline/history?fixtureId=${fixtureId}&hours=6`)
+    const historyUrl = matchStartTime
+      ? `/api/txline/history?fixtureId=${fixtureId}&startTime=${matchStartTime}`
+      : `/api/txline/history?fixtureId=${fixtureId}&hours=6`;
+
+    fetch(historyUrl)
       .then(r => r.json())
       .then((d: { events: RawEvent[]; error?: string }) => {
         if (cancelled) return;
@@ -471,13 +562,61 @@ export function EventFeed({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fixtureId]);
 
-  // ── live stream ────────────────────────────────────────────────────────────
+  // ── live stream and polling fallback ───────────────────────────────────────
   useEffect(() => {
-    const es = new EventSource("/api/txline/stream/scores");
-    es.onopen  = () => setConnected(true);
-    es.onerror = () => setConnected(false);
+    let cancelled = false;
+    let es: EventSource | null = new EventSource("/api/txline/stream/scores");
+    let pollInterval: NodeJS.Timeout | null = null;
+    let lastEventCount = 0;
+
+    const startPolling = () => {
+      if (pollInterval) return;
+      pollInterval = setInterval(() => {
+        const historyUrl = matchStartTime
+          ? `/api/txline/history?fixtureId=${fixtureId}&startTime=${matchStartTime}`
+          : `/api/txline/history?fixtureId=${fixtureId}&hours=6`;
+        
+        fetch(historyUrl)
+          .then(r => r.json())
+          .then((d: { events: RawEvent[]; error?: string }) => {
+            if (cancelled || !d.events) return;
+            setConnected(true);
+            const parsed = d.events.map((r, i) => parseEvent(r, idxRef.current + i));
+            idxRef.current += d.events.length;
+            
+            setEvents(prev => {
+               // Only update if we have new events to avoid unnecessary re-renders
+               if (d.events.length === lastEventCount) return prev;
+               lastEventCount = d.events.length;
+               const sorted = parsed.slice().sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+               return sorted;
+            });
+            onEventsChange?.(d.events);
+            if (d.events.some(r => String(r.Action ?? "").toLowerCase() === "game_finalised")) {
+              onMatchEnd?.();
+            }
+          })
+          .catch(() => {});
+      }, 5000);
+    };
+
+    es.onopen  = () => {
+      if (cancelled) return;
+      setConnected(true);
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+    };
+    
+    es.onerror = () => {
+      if (cancelled) return;
+      setConnected(false);
+      startPolling(); // Fallback to polling
+    };
 
     es.onmessage = (e) => {
+      if (cancelled) return;
       let raw: RawEvent;
       try { raw = JSON.parse(e.data); } catch { return; }
 
@@ -501,7 +640,7 @@ export function EventFeed({
               const next = [...prev];
               next[idx] = { ...prev[idx],
                 raw: { ...prev[idx].raw,
-                  ...(parsed.raw.Score !== undefined ? { Score: parsed.raw.Score } : {}),
+                  ...(parsed.raw.ScoreSoccer !== undefined ? { ScoreSoccer: parsed.raw.ScoreSoccer } : {}),
                 },
                 ts: parsed.ts ?? prev[idx].ts,
               };
@@ -529,9 +668,20 @@ export function EventFeed({
         if (a === "game_finalised") onMatchEnd?.();
       }
       if (AUTO_VERIFY.has(a)) void verify(parsed);
+      if (GOALS.has(a)) {
+        onGoal?.({
+          side: teamSide(parsed.raw),
+          teamName: team(parsed.raw, fixtureLabel) ?? undefined,
+          scoreLabel: scoreAtGoal(parsed.raw) ?? undefined,
+        });
+      }
     };
 
-    return () => es.close();
+    return () => {
+      cancelled = true;
+      if (es) es.close();
+      if (pollInterval) clearInterval(pollInterval);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fixtureId]);
 
@@ -541,6 +691,8 @@ export function EventFeed({
     return t === "key" || t === "marker";
   });
   const activityList = events.filter(e => classify(e.action) === "activity");
+  const phase = extractPhase(events.map(e => e.raw));
+  const matchFinished = phase != null && !phase.live;
 
   return (
     <>
@@ -550,10 +702,17 @@ export function EventFeed({
           <span className="font-mono text-[10px] uppercase tracking-widest text-text-dim">
             Match events
           </span>
-          <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest ${connected ? "border-accent/30 bg-accent-dim text-accent" : "border-border text-text-dimmer"}`}>
-            <Icon icon={connected ? Wifi01Icon : WifiOff01Icon} size={9} />
-            {connected ? "Live" : "Offline"}
-          </span>
+          {matchFinished ? (
+            <span className="flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-text-dimmer">
+              <Icon icon={CheckmarkCircle01Icon} size={9} />
+              {phase.label}
+            </span>
+          ) : (
+            <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest ${connected ? "border-accent/30 bg-accent-dim text-accent" : "border-border text-text-dimmer"}`}>
+              <Icon icon={connected ? Wifi01Icon : WifiOff01Icon} size={9} />
+              {connected ? "Live" : "Connecting…"}
+            </span>
+          )}
         </div>
 
         {/* Loading skeleton */}
@@ -597,7 +756,14 @@ export function EventFeed({
                   kickoff: <Icon icon={FootballIcon} size={12} />,
                 };
                 const a = (evt.action ?? "").toLowerCase();
-                return <MarkerRow key={evt.key} label={labels[a] ?? a} icon={icons[a] ?? null} />;
+                return (
+                  <MarkerRow
+                    key={evt.key}
+                    label={labels[a] ?? a}
+                    icon={icons[a] ?? null}
+                    time={wallClock(evt.ts)}
+                  />
+                );
               }
               return (
                 <EventRow
@@ -605,6 +771,7 @@ export function EventFeed({
                   evt={evt}
                   fixtureLabel={fixtureLabel}
                   matchStartTime={matchStartTime}
+                  allEvents={events}
                   verifyState={vstates[evt.key] ?? "idle"}
                   verifyError={verrors[evt.key] ?? null}
                   verifyResult={vresults[evt.key]}
@@ -612,15 +779,17 @@ export function EventFeed({
                   onVerify={() => verify(evt)}
                   onToggleExpand={() => setExpanded(s => ({ ...s, [evt.key]: !s[evt.key] }))}
                   onShare={() => {
+                    const cfg = cardConfig(evt, fixtureLabel, events);
                     const r = vresults[evt.key];
-                    if (!r) return;
-                    const cfg = cardConfig(evt, fixtureLabel);
                     setShareMoment({
-                      label: cfg.title,
+                      title: cfg.title,
+                      detail: cfg.detail,
+                      accent: cfg.accent,
                       fixtureLabel,
                       minuteLabel: minute(evt, matchStartTime) ?? undefined,
-                      dailyScoresPda: r.dailyScoresPda,
-                      epochDay: r.epochDay,
+                      verified: !!r?.verified,
+                      dailyScoresPda: r?.dailyScoresPda,
+                      epochDay: r?.epochDay,
                     });
                   }}
                 />
@@ -658,6 +827,7 @@ export function EventFeed({
                     <span className="flex h-5 w-5 shrink-0 items-center justify-center text-text-dimmer">{icon}</span>
                     <span className="flex-1">{label}</span>
                     {t && <span className="shrink-0 font-mono text-[10px] text-text-dimmer">{t}</span>}
+                    <span className="shrink-0 font-mono text-[10px] text-text-dimmer">{wallClock(evt.ts)}</span>
                   </li>
                 );
               })}

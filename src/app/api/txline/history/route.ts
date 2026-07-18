@@ -7,9 +7,11 @@ import {
 } from "@/lib/txline/server";
 
 const MS_PER_INTERVAL = 5 * 60 * 1000;
-// Scan at most 12 hours back in 5-min buckets for recent/live fixtures
-const MAX_HOURS = 12;
+// Regulation (90) + half time (15) + extra time (30) + stoppage buffer
+const MATCH_WINDOW_HOURS = 3.5;
+const MAX_SCAN_HOURS = 12;
 const BATCH_SIZE = 8;
+const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
 
 type RawUpdate = Record<string, unknown>;
 
@@ -88,86 +90,17 @@ function dedupAndSort(collected: RawUpdate[]): RawUpdate[] {
   return result;
 }
 
-/**
- * GET /api/txline/history?fixtureId=X&hours=6
- *
- * Strategy (in order):
- * 1. Try /scores/historical/{fixtureId} — covers fixtures whose start time
- *    was between 2 weeks and 6 hours ago. This is the right path for all
- *    finished matches (quarter-finals, semis, etc.).
- * 2. Try /scores/snapshot/{fixtureId} — returns the latest state snapshot;
- *    useful for upcoming or very recently finished matches.
- * 3. Fall back to scanning /scores/updates/{epochDay}/{hour}/{interval}
- *    buckets backwards from now — covers the live/recent window.
- *
- * The first source that returns data wins. All three are tried concurrently
- * for the snapshot + bucket scan to keep latency low.
- */
-export async function GET(req: NextRequest) {
-  const jwt = req.cookies.get(JWT_COOKIE)?.value;
-  const apiToken = req.cookies.get(API_TOKEN_COOKIE)?.value;
-
-  if (!jwt || !apiToken) {
-    return NextResponse.json(
-      { error: "Not activated. Connect a wallet and activate the free tier first." },
-      { status: 401 }
-    );
-  }
-
-  const fixtureId = req.nextUrl.searchParams.get("fixtureId");
-  if (!fixtureId) {
-    return NextResponse.json({ error: "fixtureId is required" }, { status: 400 });
-  }
-
-  const hours = Math.min(
-    Number(req.nextUrl.searchParams.get("hours") ?? 6) || 6,
-    MAX_HOURS
-  );
-
+/** Scan 5-minute update buckets across [fromMs, fromMs + windowHours). */
+async function scanBuckets(
+  fixtureId: string,
+  fromMs: number,
+  windowHours: number,
+  jwt: string,
+  apiToken: string
+): Promise<{ events: RawUpdate[]; jwt: string }> {
   let currentJwt = jwt;
-
-  // ── 1. Historical endpoint (finished matches, 6h–2wk window) ──────────────
-  try {
-    const { status, body, renewedJwt } = await txlineDataFetch(
-      `/scores/historical/${fixtureId}`,
-      currentJwt,
-      apiToken
-    );
-    if (renewedJwt) currentJwt = renewedJwt;
-    if (status === 200 && Array.isArray(body) && body.length > 0) {
-      const events = dedupAndSort(body as RawUpdate[]);
-      const res = NextResponse.json({ events, source: "historical" });
-      if (currentJwt !== jwt) res.cookies.set(JWT_COOKIE, currentJwt, cookieOptions);
-      return res;
-    }
-  } catch {
-    // Fall through to next strategy
-  }
-
-  // ── 2. Scores snapshot (current/recent state) ────────────────────────────
-  // The snapshot already reflects the final resolved state (discards applied
-  // server-side). Use it alone for finished matches — skip the bucket scan
-  // which would re-introduce stale intermediate events.
-  const snapResult = await txlineDataFetch(
-    `/scores/snapshot/${fixtureId}`,
-    currentJwt,
-    apiToken
-  ).catch(() => null);
-
-  if (snapResult) {
-    if (snapResult.renewedJwt) currentJwt = snapResult.renewedJwt;
-    if (snapResult.status === 200 && Array.isArray(snapResult.body) && snapResult.body.length > 0) {
-      const events = dedupAndSort(snapResult.body as RawUpdate[]);
-      const res = NextResponse.json({ events, source: "snapshot" });
-      if (currentJwt !== jwt) res.cookies.set(JWT_COOKIE, currentJwt, cookieOptions);
-      return res;
-    }
-  }
-
-  // ── 3. Bucket scan fallback (live/very-recent matches only) ───────────────
-  const intervalCount = hours * 12;
-  const now = Date.now();
-  const targets = Array.from({ length: intervalCount }, (_, i) => now - i * MS_PER_INTERVAL);
+  const intervalCount = Math.ceil((windowHours * 60) / 5);
+  const targets = Array.from({ length: intervalCount }, (_, i) => fromMs + i * MS_PER_INTERVAL);
   const collected: RawUpdate[] = [];
 
   for (let i = 0; i < targets.length; i += BATCH_SIZE) {
@@ -190,8 +123,103 @@ export async function GET(req: NextRequest) {
     results.forEach((arr) => collected.push(...arr));
   }
 
-  const events = dedupAndSort(collected);
-  const res = NextResponse.json({ events, source: "scan" });
+  return { events: collected, jwt: currentJwt };
+}
+
+/**
+ * GET /api/txline/history?fixtureId=X&startTime=<epochMs>&hours=6
+ *
+ * The bucket-scan endpoint (/scores/updates/{epochDay}/{hour}/{interval}) is
+ * the ONLY source that returns a true chronological event log. The
+ * "historical"/"snapshot" endpoints instead return one row per DISTINCT
+ * ACTION TYPE (its latest occurrence) — a 3-goal match's snapshot has
+ * exactly one "goal" row, not three — so they cannot represent a full
+ * timeline and are only used as a last-resort fallback (at least shows
+ * *something*) when the bucket scan comes back empty (e.g. a match old
+ * enough to be outside the update-bucket retention window).
+ *
+ * Strategy:
+ * 1. If `startTime` (fixture kickoff) is known, scan buckets across the
+ *    actual match window [kickoff, kickoff + ~3.5h) — covers the real
+ *    match regardless of how long ago it was played.
+ * 2. If `startTime` is unknown (e.g. manual fixture-ID entry), scan
+ *    backwards from now for `hours` — best effort for a presumed-live match.
+ * 3. If the scan returns nothing, fall back to /scores/historical or
+ *    /scores/snapshot so at least the current state is shown.
+ */
+export async function GET(req: NextRequest) {
+  const jwt = req.cookies.get(JWT_COOKIE)?.value;
+  const apiToken = req.cookies.get(API_TOKEN_COOKIE)?.value;
+
+  if (!jwt || !apiToken) {
+    return NextResponse.json(
+      { error: "Not activated. Connect a wallet and activate the free tier first." },
+      { status: 401 }
+    );
+  }
+
+  const fixtureId = req.nextUrl.searchParams.get("fixtureId");
+  if (!fixtureId) {
+    return NextResponse.json({ error: "fixtureId is required" }, { status: 400 });
+  }
+
+  const startTimeParam = Number(req.nextUrl.searchParams.get("startTime") ?? NaN);
+  const hasStartTime = !isNaN(startTimeParam) && startTimeParam > 0;
+  const now = Date.now();
+
+  const hours = Math.min(
+    Number(req.nextUrl.searchParams.get("hours") ?? 6) || 6,
+    MAX_SCAN_HOURS
+  );
+
+  let currentJwt = jwt;
+  let events: RawUpdate[] = [];
+  let source: string;
+
+  if (hasStartTime && now - startTimeParam < TWO_WEEKS_MS + MATCH_WINDOW_HOURS * 3_600_000) {
+    // Known kickoff, within retention — scan the real match window.
+    const scan = await scanBuckets(fixtureId, startTimeParam, MATCH_WINDOW_HOURS, currentJwt, apiToken);
+    currentJwt = scan.jwt;
+    events = dedupAndSort(scan.events);
+    source = "scan:kickoff";
+  } else {
+    // Unknown kickoff — best effort, scan backwards from now (live match assumption).
+    const scan = await scanBuckets(fixtureId, now - hours * 3_600_000, hours, currentJwt, apiToken);
+    currentJwt = scan.jwt;
+    events = dedupAndSort(scan.events);
+    source = "scan:recent";
+  }
+
+  if (events.length === 0) {
+    // Fallback: at least surface current state via the per-action snapshots.
+    try {
+      const { status, body, renewedJwt } = await txlineDataFetch(
+        `/scores/historical/${fixtureId}`,
+        currentJwt,
+        apiToken
+      );
+      if (renewedJwt) currentJwt = renewedJwt;
+      if (status === 200 && Array.isArray(body) && body.length > 0) {
+        events = dedupAndSort(body as RawUpdate[]);
+        source = "historical";
+      }
+    } catch { /* fall through */ }
+  }
+
+  if (events.length === 0) {
+    const snapResult = await txlineDataFetch(`/scores/snapshot/${fixtureId}`, currentJwt, apiToken).catch(
+      () => null
+    );
+    if (snapResult) {
+      if (snapResult.renewedJwt) currentJwt = snapResult.renewedJwt;
+      if (snapResult.status === 200 && Array.isArray(snapResult.body) && snapResult.body.length > 0) {
+        events = dedupAndSort(snapResult.body as RawUpdate[]);
+        source = "snapshot";
+      }
+    }
+  }
+
+  const res = NextResponse.json({ events, source });
   if (currentJwt !== jwt) res.cookies.set(JWT_COOKIE, currentJwt, cookieOptions);
   return res;
 }

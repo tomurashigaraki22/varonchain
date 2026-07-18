@@ -3,14 +3,18 @@
 import { useCallback, useState } from "react";
 import { AppNavbar } from "@/components/app/AppNavbar";
 import { ActivationPanel } from "@/components/ActivationPanel";
+import { FeaturedMatch } from "@/components/app/FeaturedMatch";
 import { FixtureList } from "@/components/app/FixtureList";
 import { MatchHeader } from "@/components/app/MatchHeader";
 import { EventFeed } from "@/components/app/EventFeed";
 import { OddsSparkline } from "@/components/app/OddsSparkline";
 import { MatchModal } from "@/components/app/MatchModal";
 import { PredictionGame } from "@/components/app/PredictionGame";
+import { CrowdPulseTrader } from "@/components/app/CrowdPulseTrader";
+import { GoalCelebration, type CelebrationPayload } from "@/components/app/GoalCelebration";
 import { useFixtures, type Fixture } from "@/lib/hooks/useFixtures";
 import { useActivationStatus } from "@/lib/hooks/useActivationStatus";
+import { extractPhase } from "@/lib/txline/scoreSoccer";
 
 type RawScoreEvent = Record<string, unknown>;
 
@@ -27,6 +31,7 @@ export default function AppPage() {
   const [matchEvents, setMatchEvents] = useState<RawScoreEvent[]>([]);
   const [latestKeyAction, setLatestKeyAction] = useState<string | undefined>();
   const [matchEnded, setMatchEnded] = useState(false);
+  const [celebration, setCelebration] = useState<CelebrationPayload | null>(null);
 
   const activated = serverStatus === "activated" || localActivated;
   const { fixtures, loading, error } = useFixtures(activated);
@@ -35,9 +40,12 @@ export default function AppPage() {
     setSelectedFixture(fixture);
     setMatchEvents([]);
     setLatestKeyAction(undefined);
-    // Immediately mark as ended if the fixture GameState is already finished
-    const gs = Number(fixture.raw.GameState ?? 1);
-    setMatchEnded([5, 10, 13].includes(gs));
+    // Best-effort initial guess (kickoff more than ~3h ago) — EventFeed
+    // corrects this once real events/history load, since fixtures/snapshot
+    // carries no actual status field to check against.
+    const startTime = Number(fixture.raw.StartTime ?? 0);
+    const LIKELY_LIVE_WINDOW = 3 * 60 * 60 * 1000;
+    setMatchEnded(startTime > 0 && Date.now() - startTime > LIKELY_LIVE_WINDOW);
     setModalOpen(true);
   }, []);
 
@@ -124,6 +132,9 @@ export default function AppPage() {
             </div>
           )}
 
+          {/* Match of the day / favourite upcoming match */}
+          {activated && <FeaturedMatch fixtures={fixtures} onSelect={handleSelectFixture} />}
+
           {/* Fixtures */}
           <FixtureList
             active={activated}
@@ -140,12 +151,12 @@ export default function AppPage() {
       {modalOpen && selectedFixture && (
         <MatchModal
           title={selectedFixture.label}
+          isLive={extractPhase(matchEvents)?.live ?? false}
           onClose={() => setModalOpen(false)}
           header={
             <MatchHeader
               label={selectedFixture.label}
               fixtureId={selectedFixture.id}
-              fixture={selectedFixture.raw as Record<string, unknown>}
               events={matchEvents}
             />
           }
@@ -158,13 +169,19 @@ export default function AppPage() {
             onEventsChange={handleEventsChange}
             onLatestKeyAction={setLatestKeyAction}
             onMatchEnd={() => setMatchEnded(true)}
+            onGoal={setCelebration}
           />
           <PredictionGame
             fixtureId={selectedFixture.id}
             latestAction={latestKeyAction}
             matchEnded={matchEnded}
           />
+          <CrowdPulseTrader fixtureId={selectedFixture.id} />
         </MatchModal>
+      )}
+
+      {celebration && (
+        <GoalCelebration payload={celebration} onDone={() => setCelebration(null)} />
       )}
     </div>
   );

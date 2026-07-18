@@ -4,11 +4,14 @@ import { useEffect } from "react";
 
 export function MatchModal({
   title,
+  isLive = false,
   onClose,
   header,
   children,
 }: {
   title: string;
+  /** Whether the match is currently in progress — controls the pulsing dot. */
+  isLive?: boolean;
   onClose: () => void;
   /** Pinned score header — rendered above the scroll body, never scrolls away */
   header?: React.ReactNode;
@@ -47,10 +50,16 @@ export function MatchModal({
         {/* Header bar */}
         <div className="flex shrink-0 items-center justify-between border-b border-border bg-surface-2/80 px-4 py-3 sm:px-5">
           <div className="flex min-w-0 items-center gap-2.5">
-            {/* Live pulse dot */}
+            {/* Live pulse dot — only pulses while the match is actually in progress */}
             <span className="relative flex h-2 w-2 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-pulse-dot rounded-full bg-accent opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+              {isLive && (
+                <span className="absolute inline-flex h-full w-full animate-pulse-dot rounded-full bg-accent opacity-75" />
+              )}
+              <span
+                className={`relative inline-flex h-2 w-2 rounded-full ${
+                  isLive ? "bg-accent" : "bg-text-dimmer"
+                }`}
+              />
             </span>
             <span className="truncate font-mono text-[11px] uppercase tracking-widest text-accent">
               {title}

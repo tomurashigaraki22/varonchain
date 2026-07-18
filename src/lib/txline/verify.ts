@@ -1,43 +1,14 @@
+"use client";
+
+import * as anchor from "@coral-xyz/anchor";
 import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
-import {
-  ComputeBudgetProgram,
-  Connection,
-  Keypair,
-  PublicKey,
-  Transaction,
-  VersionedTransaction,
-} from "@solana/web3.js";
+import { ComputeBudgetProgram, Connection, PublicKey } from "@solana/web3.js";
+import type { WalletContextState } from "@solana/wallet-adapter-react";
 import { TXLINE_CONFIG } from "./config";
 import txoracleIdl from "./idl/txoracle.devnet.json";
 import type { Txoracle } from "./types/txoracle.devnet";
 
 type ApiProofNode = { hash: number[]; isRightSibling: boolean };
-
-/**
- * Minimal Anchor-compatible wallet backed by an ephemeral, unfunded keypair.
- * `@coral-xyz/anchor`'s own `Wallet` class isn't statically exported from
- * its ESM bundle (Turbopack can't resolve it), so we implement the small
- * interface AnchorProvider needs directly instead.
- */
-function ephemeralWallet(keypair: Keypair) {
-  return {
-    publicKey: keypair.publicKey,
-    async signTransaction<T extends Transaction | VersionedTransaction>(tx: T): Promise<T> {
-      if (tx instanceof Transaction) tx.partialSign(keypair);
-      else tx.sign([keypair]);
-      return tx;
-    },
-    async signAllTransactions<T extends Transaction | VersionedTransaction>(
-      txs: T[]
-    ): Promise<T[]> {
-      txs.forEach((tx) => {
-        if (tx instanceof Transaction) tx.partialSign(keypair);
-        else tx.sign([keypair]);
-      });
-      return txs;
-    },
-  };
-}
 
 export type StatValidationApiResponse = {
   summary: {
@@ -72,16 +43,27 @@ function mapProof(nodes: ApiProofNode[]) {
 
 /**
  * Runs the TxLINE `validateStatV2` on-chain proof check via a read-only
- * simulation. No real transaction is submitted and no funded wallet is
- * required — Anchor's `.view()` only simulates, so an ephemeral keypair is
- * sufficient as the nominal fee payer.
+ * simulation, using the user's own connected wallet as fee payer.
+ *
+ * This must run client-side (not with a server-generated ephemeral
+ * keypair): Solana's simulator requires the fee-payer account to actually
+ * exist on-chain to model the transaction, even for a pure `.view()` call
+ * that never spends real SOL — a freshly generated, never-funded keypair
+ * fails simulation with `AccountNotFound`. The user's real wallet already
+ * exists on-chain (it paid for the `subscribe` transaction to activate),
+ * so reusing it here avoids needing any server-managed funded keypair at
+ * all — no real fee is ever charged since this only simulates.
  */
 export async function validateStatsOnChain(
+  connection: Connection,
+  wallet: WalletContextState,
   val: StatValidationApiResponse
 ): Promise<OnChainVerifyResult> {
-  const connection = new Connection(TXLINE_CONFIG.rpcUrl, "confirmed");
-  const wallet = ephemeralWallet(Keypair.generate());
-  const provider = new AnchorProvider(connection, wallet, {
+  if (!wallet.publicKey || !wallet.signTransaction) {
+    throw new Error("Wallet not connected");
+  }
+
+  const provider = new AnchorProvider(connection, wallet as unknown as anchor.Wallet, {
     commitment: "confirmed",
   });
   const program = new Program<Txoracle>(
@@ -94,7 +76,7 @@ export async function validateStatsOnChain(
 
   const [dailyScoresPda] = PublicKey.findProgramAddressSync(
     [Buffer.from("daily_scores_roots"), new BN(epochDay).toArrayLike(Buffer, "le", 2)],
-    program.programId
+    TXLINE_CONFIG.programId
   );
 
   const payload = {
