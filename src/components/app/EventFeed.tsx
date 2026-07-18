@@ -585,7 +585,6 @@ export function EventFeed({
             idxRef.current += d.events.length;
             
             setEvents(prev => {
-               // Only update if we have new events to avoid unnecessary re-renders
                if (d.events.length === lastEventCount) return prev;
                lastEventCount = d.events.length;
                const sorted = parsed.slice().sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
@@ -600,19 +599,20 @@ export function EventFeed({
       }, 5000);
     };
 
+    // Always start polling as a reliable backup, because devnet streams 
+    // can connect successfully but remain silently empty without firing onerror.
+    startPolling();
+
     es.onopen  = () => {
       if (cancelled) return;
       setConnected(true);
-      if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
-      }
+      // We keep polling active on devnet to guarantee updates
     };
     
     es.onerror = () => {
       if (cancelled) return;
       setConnected(false);
-      startPolling(); // Fallback to polling
+      startPolling(); 
     };
 
     es.onmessage = (e) => {
