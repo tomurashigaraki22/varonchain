@@ -5,7 +5,7 @@ import { setTelegramWebhook } from "@/lib/telegram/api";
 // Telegram's webhook at this deployment. Requires a public HTTPS origin —
 // won't work against localhost, since Telegram calls this URL directly.
 export async function GET(req: NextRequest) {
-  const origin = req.nextUrl.origin;
+  const origin = "https://varonchain.pxxl.run";
   const webhookUrl = `${origin}/api/telegram/webhook`;
   const result = await setTelegramWebhook(webhookUrl);
   return NextResponse.json({ webhookUrl, result });
