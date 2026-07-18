@@ -6,6 +6,7 @@ import { ShareCardModal, type ShareableMoment } from "./ShareCardModal";
 import { WalletErrorModal } from "./WalletErrorModal";
 import { scoreFromEvent, extractPhase } from "@/lib/txline/scoreSoccer";
 import { validateStatsOnChain, type StatValidationApiResponse } from "@/lib/txline/verify";
+import { friendlyWalletError } from "@/lib/txline/friendlyError";
 import type { PlayerState } from "@/lib/txline/lineups";
 import { Icon } from "@/components/ui/Icon";
 import {
@@ -54,15 +55,33 @@ function str(v: unknown): string | undefined {
 }
 
 function parseEvent(raw: RawEvent, idx: number): ScoreEvent {
+  const fixtureId = num(raw.FixtureId ?? raw.fixtureId);
+  const seq = num(raw.Seq ?? raw.seq);
+  const actionId = num(raw.Id ?? raw.id);
+  // Must be stable across re-parses of the SAME real event (history load,
+  // live push, poll re-fetch all call parseEvent independently) — using the
+  // volatile idx counter here meant the same goal/card got a different key
+  // every time, which showed up as duplicate list entries AND orphaned
+  // verify state (a "verified" goal reappearing under a new key looked
+  // unverified again, and if auto-verify re-ran on it and happened to
+  // fail, it looked like a real failure the user never triggered).
+  const stableId = seq ?? actionId ?? `idx${idx}`;
   return {
-    key: `${num(raw.FixtureId ?? raw.fixtureId) ?? "x"}-${num(raw.Seq ?? raw.seq) ?? idx}-${idx}`,
-    actionId: num(raw.Id ?? raw.id),
-    fixtureId: num(raw.FixtureId ?? raw.fixtureId),
-    seq: num(raw.Seq ?? raw.seq),
+    key: `${fixtureId ?? "x"}-${stableId}`,
+    actionId,
+    fixtureId,
+    seq,
     action: str(raw.Action ?? raw.action),
     ts: num(raw.Ts ?? raw.ts),
     raw,
   };
+}
+
+/** Dedupe by stable key, incoming wins on conflict (fresher data). */
+function mergeEvents(prev: ScoreEvent[], incoming: ScoreEvent[]): ScoreEvent[] {
+  const byKey = new Map(prev.map((e) => [e.key, e]));
+  for (const e of incoming) byKey.set(e.key, e);
+  return Array.from(byKey.values()).sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
 }
 
 /**
@@ -385,12 +404,12 @@ function MarkerRow({
 /** A single key event row in the timeline */
 function EventRow({
   evt, fixtureLabel, matchStartTime, allEvents, players,
-  verifyState, verifyError, verifyResult,
+  verifyState, verifyError, verifyResult, verifyHint,
   isExpanded, onVerify, onToggleExpand, onShare,
 }: {
   evt: ScoreEvent; fixtureLabel: string; matchStartTime?: number; allEvents: ScoreEvent[];
   players: PlayerState[];
-  verifyState: VerifyState; verifyError: VerifyError; verifyResult?: VerifyResult;
+  verifyState: VerifyState; verifyError: VerifyError; verifyResult?: VerifyResult; verifyHint?: string;
   isExpanded: boolean;
   onVerify(): void; onToggleExpand(): void; onShare(): void;
 }) {
@@ -466,9 +485,9 @@ function EventRow({
                 </button>
               )}
               {verifyState === "checking" && (
-                <span className="flex items-center gap-1 rounded-full border border-warning/30 bg-warning/10 px-2.5 py-0.5 font-mono text-[9px] text-warning">
+                <span title={verifyHint} className="flex items-center gap-1 rounded-full border border-warning/30 bg-warning/10 px-2.5 py-0.5 font-mono text-[9px] text-warning">
                   <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-warning border-t-transparent" />
-                  Checking
+                  {verifyHint ?? "Checking"}
                 </span>
               )}
               {verifyState === "verified" && (
@@ -478,10 +497,10 @@ function EventRow({
                 </button>
               )}
               {verifyState === "failed" && (
-                <span title={verifyError ?? "Failed"}
-                  className="cursor-help rounded-full border border-danger/30 bg-danger/10 px-2.5 py-0.5 font-mono text-[9px] text-danger">
-                  ✗ Failed
-                </span>
+                <button onClick={onVerify} title={verifyError ? `${verifyError} — click to retry` : "Click to retry"}
+                  className="flex items-center gap-1 rounded-full border border-danger/30 bg-danger/10 px-2.5 py-0.5 font-mono text-[9px] text-danger transition-colors hover:bg-danger/20">
+                  ✗ Failed · Retry
+                </button>
               )}
             </>
           )}
@@ -533,6 +552,7 @@ export function EventFeed({
   const [vstates, setVstates] = useState<Record<string, VerifyState>>({});
   const [vresults, setVresults] = useState<Record<string, VerifyResult>>({});
   const [verrors, setVerrors] = useState<Record<string, VerifyError>>({});
+  const [vhints, setVhints] = useState<Record<string, string>>({});
   const [walletError, setWalletError] = useState<string | null>(null);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -541,6 +561,12 @@ export function EventFeed({
   const [connected, setConnected] = useState(false);
   const [loadState, setLoadState] = useState<"loading" | "done" | "error">("loading");
   const idxRef = useRef(0);
+  // Keys already seen (from history or a prior live/poll tick) — used to
+  // tell genuinely NEW events apart from re-deliveries of the same event,
+  // so prediction callbacks / auto-verify / celebrations only fire once
+  // per real event instead of every time it's re-parsed.
+  const seenKeysRef = useRef<Set<string>>(new Set());
+  const autoVerifiedRef = useRef<Set<string>>(new Set());
 
   // ── verify ─────────────────────────────────────────────────────────────────
   // The proof is fetched server-side (needs the activated session's cookies),
@@ -549,40 +575,71 @@ export function EventFeed({
   // payer to actually exist on-chain, which a server-side throwaway keypair
   // never does. This will prompt a lightweight signature in the wallet (no
   // real transaction is submitted or SOL spent — it's a read-only simulation).
-  async function verify(evt: ScoreEvent) {
-    if (evt.fixtureId == null || evt.seq == null) return;
-    setVstates(s => ({ ...s, [evt.key]: "checking" }));
-    try {
+  //
+  // A goal/card streaming in live means the underlying stat was JUST
+  // recorded — TxLINE's backend needs a beat to actually anchor its Merkle
+  // root on-chain before /scores/stat-validation has anything to return.
+  // Verifying the instant the event arrives was asking "prove this
+  // happened" before the proof existed yet, so it failed almost every
+  // time — not a real failure, just asked too early. Retrying the PROOF
+  // FETCH (server-side, no wallet interaction) a few times with backoff
+  // fixes that without ever prompting the wallet more than once.
+  const PROOF_RETRY_DELAYS_MS = [0, 3000, 5000, 8000];
+
+  async function fetchProofWithRetry(
+    evt: ScoreEvent,
+    onAttempt?: (attempt: number, maxAttempts: number) => void
+  ): Promise<StatValidationApiResponse> {
+    let lastError = "Failed to fetch proof";
+    for (let attempt = 0; attempt < PROOF_RETRY_DELAYS_MS.length; attempt++) {
+      if (PROOF_RETRY_DELAYS_MS[attempt] > 0) {
+        await new Promise((r) => setTimeout(r, PROOF_RETRY_DELAYS_MS[attempt]));
+      }
+      onAttempt?.(attempt, PROOF_RETRY_DELAYS_MS.length);
       const res = await fetch("/api/txline/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fixtureId: evt.fixtureId, seq: evt.seq, statKeys: statKeys(evt.action) }),
       });
       const d = await res.json();
-      if (!res.ok) throw new Error(d?.error ?? "Failed to fetch proof");
+      if (res.ok) return d.proof as StatValidationApiResponse;
+      lastError = d?.error ?? lastError;
+    }
+    throw new Error(lastError);
+  }
+
+  async function verify(evt: ScoreEvent) {
+    if (evt.fixtureId == null || evt.seq == null) return;
+    setVstates(s => ({ ...s, [evt.key]: "checking" }));
+    setVhints(s => ({ ...s, [evt.key]: "Checking…" }));
+    try {
+      const proof = await fetchProofWithRetry(evt, (attempt, max) => {
+        setVhints(s => ({
+          ...s,
+          [evt.key]: attempt === 0 ? "Checking…" : `Waiting for on-chain anchor… (${attempt}/${max - 1})`,
+        }));
+      });
 
       if (!wallet.connected) throw new Error("Connect a wallet to verify");
-      const result = await validateStatsOnChain(connection, wallet, d.proof as StatValidationApiResponse);
+      setVhints(s => ({ ...s, [evt.key]: "Confirm in your wallet…" }));
+      const result = await validateStatsOnChain(connection, wallet, proof);
 
       setVresults(s => ({ ...s, [evt.key]: result }));
       setVstates(s => ({ ...s, [evt.key]: result.verified ? "verified" : "failed" }));
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed";
+      const rawMsg = e instanceof Error ? e.message : "Failed";
+      const msg = friendlyWalletError(e);
       setVerrors(s => ({ ...s, [evt.key]: msg }));
       setVstates(s => ({ ...s, [evt.key]: "failed" }));
-      
+
       // Check for common wallet connection issues (Phantom inject errors, disconnected states)
       if (
-        !wallet.connected || 
-        msg.includes("Connect a wallet") || 
-        msg.includes("Receiving end does not exist") ||
-        msg.includes("User rejected")
+        !wallet.connected ||
+        rawMsg.includes("Connect a wallet") ||
+        rawMsg.includes("Receiving end does not exist") ||
+        rawMsg.includes("User rejected")
       ) {
-        setWalletError(
-          msg.includes("Connect") 
-            ? "Please connect your wallet first." 
-            : "We couldn't reach your wallet extension. Please ensure it's unlocked, or try refreshing the page."
-        );
+        setWalletError(msg);
       }
     }
   }
@@ -590,8 +647,14 @@ export function EventFeed({
   // ── history backfill ───────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
-    setEvents([]); setVstates({}); setVresults({}); setVerrors({});
-    setLoadState("loading");
+    seenKeysRef.current = new Set();
+    autoVerifiedRef.current = new Set();
+
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      setEvents([]); setVstates({}); setVresults({}); setVerrors({});
+      setLoadState("loading");
+    });
 
     const historyUrl = matchStartTime
       ? `/api/txline/history?fixtureId=${fixtureId}&startTime=${matchStartTime}`
@@ -604,8 +667,9 @@ export function EventFeed({
         if (!d.events) throw new Error(d.error ?? "No events");
         const parsed = d.events.map((r, i) => parseEvent(r, idxRef.current + i));
         idxRef.current += d.events.length;
-        // Newest first
-        setEvents(parsed.slice().sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0)));
+        const merged = mergeEvents([], parsed); // dedupe within the batch itself
+        merged.forEach((e) => seenKeysRef.current.add(e.key));
+        setEvents(merged);
         onEventsChange?.(d.events);
         if (d.events.some(r => String(r.Action ?? "").toLowerCase() === "game_finalised")) {
           onMatchEnd?.();
@@ -625,13 +689,39 @@ export function EventFeed({
     let pollInterval: NodeJS.Timeout | null = null;
     let lastEventCount = 0;
 
+    // Shared by both the poll and live paths — fires prediction/celebration/
+    // auto-verify side effects exactly once per real event, using the
+    // stable key rather than array position or a "did the count change"
+    // heuristic. Fixes predictions never resolving for corner/penalty
+    // (they were never promoted past display-tier "activity" before) and
+    // fixes the polling fallback never triggering predictions at all.
+    const notifyNewEvent = (evt: ScoreEvent) => {
+      const a = (evt.action ?? "").toLowerCase();
+      const tier = classify(a);
+      if (tier !== "system") {
+        onLatestKeyAction?.(a);
+        if (a === "game_finalised") onMatchEnd?.();
+      }
+      if (AUTO_VERIFY.has(a) && !autoVerifiedRef.current.has(evt.key)) {
+        autoVerifiedRef.current.add(evt.key);
+        void verify(evt);
+      }
+      if (GOALS.has(a)) {
+        onGoal?.({
+          side: teamSide(evt.raw),
+          teamName: team(evt.raw, fixtureLabel) ?? undefined,
+          scoreLabel: scoreAtGoal(evt.raw) ?? undefined,
+        });
+      }
+    };
+
     const startPolling = () => {
       if (pollInterval) return;
       pollInterval = setInterval(() => {
         const historyUrl = matchStartTime
           ? `/api/txline/history?fixtureId=${fixtureId}&startTime=${matchStartTime}`
           : `/api/txline/history?fixtureId=${fixtureId}&hours=6`;
-        
+
         fetch(historyUrl)
           .then(r => r.json())
           .then((d: { events: RawEvent[]; error?: string }) => {
@@ -639,7 +729,7 @@ export function EventFeed({
             setConnected(true);
             const parsed = d.events.map((r, i) => parseEvent(r, idxRef.current + i));
             idxRef.current += d.events.length;
-            
+
             // Only act when the poll actually returned new data — this
             // fetch re-pulls the FULL match history every 5s as a fallback,
             // so calling onEventsChange unconditionally here re-sends the
@@ -648,20 +738,21 @@ export function EventFeed({
             if (d.events.length === lastEventCount) return;
             lastEventCount = d.events.length;
 
-            setEvents(() => {
-               const sorted = parsed.slice().sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
-               return sorted;
-            });
+            const newOnes = parsed.filter((e) => !seenKeysRef.current.has(e.key));
+            newOnes.forEach((e) => seenKeysRef.current.add(e.key));
+
+            // Merge, never wholesale-replace — replacing wiped out events
+            // the live stream had already added but this poll's snapshot
+            // hadn't caught up to yet ("old events disappear").
+            setEvents((prev) => mergeEvents(prev, parsed));
             onEventsChange?.(d.events);
-            if (d.events.some(r => String(r.Action ?? "").toLowerCase() === "game_finalised")) {
-              onMatchEnd?.();
-            }
+            newOnes.forEach(notifyNewEvent);
           })
           .catch(() => {});
       }, 5000);
     };
 
-    // Always start polling as a reliable backup, because devnet streams 
+    // Always start polling as a reliable backup, because devnet streams
     // can connect successfully but remain silently empty without firing onerror.
     startPolling();
 
@@ -670,11 +761,11 @@ export function EventFeed({
       setConnected(true);
       // We keep polling active on devnet to guarantee updates
     };
-    
+
     es.onerror = () => {
       if (cancelled) return;
       setConnected(false);
-      startPolling(); 
+      startPolling();
     };
 
     es.onmessage = (e) => {
@@ -691,6 +782,9 @@ export function EventFeed({
         if (id != null) setEvents(p => p.filter(ev => ev.actionId !== id));
         return;
       }
+
+      const isNew = !seenKeysRef.current.has(parsed.key);
+      seenKeysRef.current.add(parsed.key);
 
       setEvents(prev => {
         if (a === "action_amend") {
@@ -720,23 +814,16 @@ export function EventFeed({
             return next;
           }
         }
+        if (!isNew) {
+          // Re-delivery of an event we already have (e.g. SSE reconnect
+          // resending its recent buffer) — refresh in place, don't duplicate.
+          return prev.map((ev) => (ev.key === parsed.key ? parsed : ev));
+        }
         return [parsed, ...prev].slice(0, 300);
       });
 
       onEventsChange?.([raw]);
-      const tier = classify(a);
-      if (tier === "key" || tier === "marker") {
-        onLatestKeyAction?.(a);
-        if (a === "game_finalised") onMatchEnd?.();
-      }
-      if (AUTO_VERIFY.has(a)) void verify(parsed);
-      if (GOALS.has(a)) {
-        onGoal?.({
-          side: teamSide(parsed.raw),
-          teamName: team(parsed.raw, fixtureLabel) ?? undefined,
-          scoreLabel: scoreAtGoal(parsed.raw) ?? undefined,
-        });
-      }
+      if (isNew) notifyNewEvent(parsed);
     };
 
     return () => {
@@ -838,6 +925,7 @@ export function EventFeed({
                   verifyState={vstates[evt.key] ?? "idle"}
                   verifyError={verrors[evt.key] ?? null}
                   verifyResult={vresults[evt.key]}
+                  verifyHint={vhints[evt.key]}
                   isExpanded={!!expanded[evt.key]}
                   onVerify={() => verify(evt)}
                   onToggleExpand={() => setExpanded(s => ({ ...s, [evt.key]: !s[evt.key] }))}

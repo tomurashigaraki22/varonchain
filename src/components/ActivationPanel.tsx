@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { activateFreeTier } from "@/lib/txline/subscribeClient";
+import { friendlyWalletError } from "@/lib/txline/friendlyError";
 
 type Status = "idle" | "checking" | "activating" | "activated" | "error";
 
@@ -59,7 +60,7 @@ export function ActivationPanel({
       setStatus("activated");
     } catch (err) {
       setStatus("error");
-      setError(err instanceof Error ? err.message : "Activation failed");
+      setError(friendlyWalletError(err));
     }
   };
 
