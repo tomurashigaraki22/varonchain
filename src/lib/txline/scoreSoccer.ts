@@ -95,19 +95,21 @@ function tsOf(raw: RawEvent): number {
 
 /**
  * Scan an array of TxLINE score events and return the definitive score.
- * Priority: game_finalised/halftime_finalised (authoritative, order-
- * independent presence check) > the single event with the greatest Ts that
- * carries a usable score (true recency, not array position).
+ * Priority: game_finalised (truly authoritative, order-independent presence
+ * check — nothing else can happen after a match is finalised) > the single
+ * event with the greatest Ts that carries a usable score (true recency, not
+ * array position).
+ *
+ * halftime_finalised is deliberately NOT given the same presence-check
+ * priority as game_finalised: it marks a break mid-match, not the end of
+ * one. Treating it as authoritative caused the scoreboard to freeze at the
+ * half-time score forever, even after second-half goals streamed in with a
+ * later Ts — it's just a regular event in the recency scan below.
  */
 export function extractScore(events: RawEvent[]): SoccerScore {
   const finalised = events.find((e) => actionOf(e) === "game_finalised");
   if (finalised) {
     const score = scoreFromEvent(finalised);
-    if (score.home != null || score.away != null) return score;
-  }
-  const halftime = events.find((e) => actionOf(e) === "halftime_finalised");
-  if (halftime) {
-    const score = scoreFromEvent(halftime);
     if (score.home != null || score.away != null) return score;
   }
 
@@ -130,17 +132,18 @@ export function extractScore(events: RawEvent[]): SoccerScore {
  * docs' Game Phase Encoding table: NS=1, H1=2, HT=3, H2=4, F=5, WET=6
  * (waiting for extra time — a break), ET1=7, HTET=8 (break), ET2=9, FET=10,
  * WPE=11 (waiting for penalties — a break), PE=12, FPE=13.
- * game_finalised/halftime_finalised are checked by presence first since
- * they're authoritative regardless of where they sit in the snapshot array;
- * everything else is resolved from whichever entry has the greatest Ts
- * (truly most recent), not array position.
+ * game_finalised is checked by presence first since it's truly authoritative
+ * — nothing else can happen after a match is finalised, regardless of where
+ * it sits in the snapshot array. halftime_finalised is NOT given the same
+ * treatment: it marks a break mid-match, not the end of one, so it must lose
+ * to any later event (like a second-half kickoff or goal) once one exists.
+ * Everything else — including halftime_finalised — is resolved from
+ * whichever entry has the greatest Ts (truly most recent), not array
+ * position.
  */
 export function extractPhase(events: RawEvent[]): MatchPhase {
   if (events.some((e) => actionOf(e) === "game_finalised")) {
     return { label: "Full time", live: false };
-  }
-  if (events.some((e) => actionOf(e) === "halftime_finalised")) {
-    return { label: "Half time", live: false };
   }
 
   let latest: RawEvent | null = null;
@@ -155,6 +158,7 @@ export function extractPhase(events: RawEvent[]): MatchPhase {
   if (!latest) return null;
 
   const action = actionOf(latest);
+  if (action === "halftime_finalised") return { label: "Half time", live: false };
   if (action.includes("kickoff") || action.includes("start")) return { label: "In play", live: true };
 
   // StatusId per the docs' Game Phase Encoding table: NS=1, H1=2, HT=3,
