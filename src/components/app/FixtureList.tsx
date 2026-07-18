@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fixtureId, fixtureLabel, type Fixture } from "@/lib/hooks/useFixtures";
 import { extractPhase, extractScore, type MatchPhase, type SoccerScore } from "@/lib/txline/scoreSoccer";
 
@@ -109,14 +109,10 @@ function OddsBar({ odds }: { odds: MatchOdds }) {
   );
 }
 
-function StatusPill({ phase, startTime }: { phase: MatchPhase; startTime: unknown }) {
-  if (!phase) {
-    return (
-      <span className="font-mono text-[10px] uppercase tracking-widest text-text-dim">
-        {formatKickoff(startTime)}
-      </span>
-    );
-  }
+function StatusPill({ phase }: { phase: MatchPhase }) {
+  // Scheduled (no phase yet) — kickoff time is shown as its own line now,
+  // so there's nothing else to show here.
+  if (!phase) return null;
   if (!phase.live) {
     return (
       <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-text-dimmer">
@@ -151,22 +147,38 @@ function FixtureCard({
   const [oddsLoading, setOddsLoading] = useState(false);
   const [phase, setPhase] = useState<MatchPhase>(null);
   const [score, setScore] = useState<SoccerScore>({});
+  // Read inside the odds-retry closure without restarting that effect —
+  // phase resolves asynchronously in a separate effect below.
+  const phaseRef = useRef<MatchPhase>(null);
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
 
-  // Retries a few times before settling on "no odds available" — a single
+  // Retries several times before settling on "not posted" — a single
   // fire-and-forget fetch was indistinguishable from a real empty market
   // whenever it hit a transient error or the market simply wasn't posted
-  // yet at the moment this card mounted.
+  // yet at the moment this card mounted. Every visible card fires this on
+  // mount, so the first attempt is staggered by card index to avoid a
+  // request burst hitting rate limits inconsistently ("sometimes shows,
+  // sometimes doesn't" was this, not a real per-fixture data gap). Stops
+  // retrying immediately once the fixture is confirmed finished — a closed
+  // market never comes back, no point burning more requests on it.
   useEffect(() => {
     let cancelled = false;
     let attempt = 0;
-    const MAX_ATTEMPTS = 3;
-    const RETRY_DELAY_MS = 2500;
+    const MAX_ATTEMPTS = 6;
+    const RETRY_DELAY_MS = 3000;
+    const STAGGER_MS = Math.min(index, 12) * 250;
 
     Promise.resolve().then(() => {
       if (!cancelled) setOddsLoading(true);
     });
 
     const load = () => {
+      if (phaseRef.current?.label === "Full time") {
+        if (!cancelled) setOddsLoading(false);
+        return;
+      }
       fetch(`/api/txline/odds?fixtureId=${id}`)
         .then((r) => r.json())
         .then((data: unknown) => {
@@ -192,12 +204,13 @@ function FixtureCard({
           }
         });
     };
-    load();
+    const kickoff = setTimeout(load, STAGGER_MS);
 
     return () => {
       cancelled = true;
+      clearTimeout(kickoff);
     };
-  }, [id]);
+  }, [id, index]);
 
   // Real live/finished status + running score — the fixtures/snapshot endpoint
   // carries neither, so this reads each card's own scores/snapshot directly.
@@ -246,6 +259,13 @@ function FixtureCard({
             <span className={`mx-2 font-normal ${isSelected || isMatchOfTheDay ? "text-accent/60" : "text-text-dimmer"}`}>vs</span>
             {away}
           </p>
+          {/* Kickoff time — always shown regardless of live/FT status,
+              not just while the fixture is still scheduled. */}
+          {fx.StartTime != null && (
+            <p className="mt-0.5 font-mono text-[10px] text-text-dimmer">
+              Kickoff {formatKickoff(fx.StartTime)}
+            </p>
+          )}
         </div>
         <div className="shrink-0 flex items-center gap-2">
           {/* Score for live and finished matches, from the fixture's own scores/snapshot */}
@@ -256,7 +276,7 @@ function FixtureCard({
               {score.away ?? 0}
             </span>
           )}
-          <StatusPill phase={phase} startTime={fx.StartTime} />
+          <StatusPill phase={phase} />
         </div>
       </div>
 
@@ -269,7 +289,9 @@ function FixtureCard({
         </div>
       )}
       {!oddsLoading && !odds && (
-        <p className="mt-3 font-mono text-[10px] text-text-dimmer">No odds available yet</p>
+        <p className="mt-3 font-mono text-[10px] text-text-dimmer">
+          {phase?.label === "Full time" ? "Odds closed" : "Odds not posted yet"}
+        </p>
       )}
 
       <div className="mt-4 flex items-center justify-between">

@@ -1,23 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
 
-function truncate(address: string) {
-  return `${address.slice(0, 4)}…${address.slice(-4)}`;
-}
+import { useWallet } from "@solana/wallet-adapter-react";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 
 export function AppNavbar() {
-  const { publicKey, connected } = useWallet();
-  const [copied, setCopied] = useState(false);
-
-  const copyAddress = () => {
-    if (!publicKey) return;
-    navigator.clipboard?.writeText(publicKey.toBase58());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
-  };
+  const { publicKey, connected, disconnect } = useWallet();
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-[rgba(8,8,8,0.85)] backdrop-blur-md">
@@ -62,16 +51,16 @@ export function AppNavbar() {
             Devnet
           </span>
 
-          {connected && publicKey && (
-            <button
-              onClick={copyAddress}
-              className="flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 font-mono text-[11px] text-text-dim transition-colors hover:border-border-hover hover:text-text"
-              title="Copy wallet address"
-            >
-              <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-accent" />
-              {copied ? "Copied" : truncate(publicKey.toBase58())}
-            </button>
-          )}
+          <WalletMultiButton style={{
+            height: "28px",
+            fontSize: "11px",
+            fontFamily: "monospace",
+            fontWeight: "bold",
+            borderRadius: "9999px",
+            padding: "0 12px",
+            backgroundColor: "#818cf8",
+            color: "#ffffff"
+          }} />
         </div>
       </div>
     </header>

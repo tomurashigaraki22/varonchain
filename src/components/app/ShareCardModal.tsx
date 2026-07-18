@@ -17,6 +17,8 @@ export type ShareAccent = "goal" | "red" | "yellow" | "var" | "none";
 export type ShareableMoment = {
   title: string;
   detail?: string;
+  scorer?: string;
+  assist?: string;
   accent: ShareAccent;
   fixtureLabel: string;
   minuteLabel?: string;
@@ -245,6 +247,9 @@ export function ShareCardModal({
                 </h3>
                 {moment.detail && (
                   <p className="mt-2 text-sm font-medium text-text">{moment.detail}</p>
+                )}
+                {moment.assist && (
+                  <p className="mt-1 text-xs text-text-dim">Assist: {moment.assist}</p>
                 )}
                 {moment.minuteLabel && (
                   <p className="mt-1 font-mono text-xs text-text-dimmer">{moment.minuteLabel}</p>

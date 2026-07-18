@@ -11,10 +11,12 @@ import { OddsSparkline } from "@/components/app/OddsSparkline";
 import { MatchModal } from "@/components/app/MatchModal";
 import { PredictionGame } from "@/components/app/PredictionGame";
 import { CrowdPulseTrader } from "@/components/app/CrowdPulseTrader";
+import { LineupPanel } from "@/components/app/LineupPanel";
 import { GoalCelebration, type CelebrationPayload } from "@/components/app/GoalCelebration";
 import { useFixtures, type Fixture } from "@/lib/hooks/useFixtures";
 import { useActivationStatus } from "@/lib/hooks/useActivationStatus";
 import { extractPhase } from "@/lib/txline/scoreSoccer";
+import { usePlayerLineups } from "@/lib/txline/lineups";
 
 type RawScoreEvent = Record<string, unknown>;
 
@@ -35,6 +37,11 @@ export default function AppPage() {
 
   const activated = serverStatus === "activated" || localActivated;
   const { fixtures, loading, error } = useFixtures(activated);
+  const { home: homeLineup, away: awayLineup, announced: lineupsAnnounced } = usePlayerLineups(
+    selectedFixture?.id ?? 0,
+    selectedFixture?.label ?? "",
+    matchEvents
+  );
 
   const handleSelectFixture = useCallback((fixture: { id: number; label: string; raw: Fixture }) => {
     setSelectedFixture(fixture);
@@ -50,7 +57,21 @@ export default function AppPage() {
   }, []);
 
   const handleEventsChange = useCallback((events: RawScoreEvent[]) => {
-    setMatchEvents((prev) => [...prev, ...events]);
+    // EventFeed's polling fallback re-sends the full match history on every
+    // poll tick (not just deltas), so this has to dedupe by a stable key
+    // rather than blindly appending — otherwise the same events pile up
+    // repeatedly for as long as the modal stays open.
+    setMatchEvents((prev) => {
+      const keyOf = (e: RawScoreEvent) => `${e.FixtureId ?? e.fixtureId}-${e.Seq ?? e.seq ?? e.Id ?? e.id}`;
+      const seen = new Set(prev.map(keyOf));
+      const additions = events.filter((e) => {
+        const key = keyOf(e);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      return additions.length > 0 ? [...prev, ...additions] : prev;
+    });
   }, []);
 
   const isChecking = serverStatus === "checking";
@@ -161,22 +182,38 @@ export default function AppPage() {
             />
           }
         >
-          <OddsSparkline fixtureId={selectedFixture.id} />
-          <EventFeed
-            fixtureId={selectedFixture.id}
-            fixtureLabel={selectedFixture.label}
-            matchStartTime={Number(selectedFixture.raw.StartTime ?? 0) || undefined}
-            onEventsChange={handleEventsChange}
-            onLatestKeyAction={setLatestKeyAction}
-            onMatchEnd={() => setMatchEnded(true)}
-            onGoal={setCelebration}
-          />
-          <PredictionGame
-            fixtureId={selectedFixture.id}
-            latestAction={latestKeyAction}
-            matchEnded={matchEnded}
-          />
-          <CrowdPulseTrader fixtureId={selectedFixture.id} />
+          <div className="grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] lg:divide-x lg:divide-border">
+            {/* Left: lineups / pitch */}
+            <div>
+              <LineupPanel home={homeLineup} away={awayLineup} announced={lineupsAnnounced} />
+              <div className="hidden lg:block">
+                <OddsSparkline fixtureId={selectedFixture.id} />
+              </div>
+            </div>
+
+            {/* Right: live events + games */}
+            <div>
+              <div className="lg:hidden">
+                <OddsSparkline fixtureId={selectedFixture.id} />
+              </div>
+              <EventFeed
+                fixtureId={selectedFixture.id}
+                fixtureLabel={selectedFixture.label}
+                matchStartTime={Number(selectedFixture.raw.StartTime ?? 0) || undefined}
+                players={[...homeLineup, ...awayLineup]}
+                onEventsChange={handleEventsChange}
+                onLatestKeyAction={setLatestKeyAction}
+                onMatchEnd={() => setMatchEnded(true)}
+                onGoal={setCelebration}
+              />
+              <PredictionGame
+                fixtureId={selectedFixture.id}
+                latestAction={latestKeyAction}
+                matchEnded={matchEnded}
+              />
+              <CrowdPulseTrader fixtureId={selectedFixture.id} />
+            </div>
+          </div>
         </MatchModal>
       )}
 

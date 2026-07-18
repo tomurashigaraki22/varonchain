@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { ShareCardModal, type ShareableMoment } from "./ShareCardModal";
+import { WalletErrorModal } from "./WalletErrorModal";
 import { scoreFromEvent, extractPhase } from "@/lib/txline/scoreSoccer";
 import { validateStatsOnChain, type StatValidationApiResponse } from "@/lib/txline/verify";
+import type { PlayerState } from "@/lib/txline/lineups";
 import { Icon } from "@/components/ui/Icon";
 import {
   FootballIcon,
@@ -178,6 +180,8 @@ type CardConfig = {
   icon: React.ReactNode;
   title: string;
   detail?: string;          // e.g. team name, player, score
+  scorer?: string;
+  assist?: string;
   accent: "goal" | "red" | "yellow" | "var" | "none";
   verifiable: boolean;
 };
@@ -216,7 +220,29 @@ const VAR_TYPE_LABELS: Record<string, string> = {
   other: "Decision",
 };
 
-function cardConfig(evt: ScoreEvent, fixtureLabel: string, allEvents: ScoreEvent[] = []): CardConfig {
+function playerName(players: PlayerState[], id: number | undefined): string | undefined {
+  if (id == null) return undefined;
+  // Data.PlayerId is confirmed to be normativeId, not fixturePlayerId —
+  // checking both is defensive and costs nothing.
+  return players.find((p) => p.fixturePlayerId === id || p.normativeId === id)?.name;
+}
+
+/**
+ * Assist isn't in any documented enum for the soccer feed's goal payload —
+ * these are best-effort field-name guesses, checked in order, and simply
+ * omitted (not fabricated) if none resolve to a real roster player.
+ */
+function assistPlayerId(raw: RawEvent): number | undefined {
+  const data = (raw.Data ?? raw.data) as Record<string, unknown> | undefined;
+  return num(data?.AssistPlayerId ?? data?.assistPlayerId ?? data?.AssistId ?? data?.assistId);
+}
+
+function cardConfig(
+  evt: ScoreEvent,
+  fixtureLabel: string,
+  allEvents: ScoreEvent[] = [],
+  players: PlayerState[] = []
+): CardConfig {
   const a = (evt.action ?? "").toLowerCase();
   const t = team(evt.raw, fixtureLabel);
   const data = evt.raw.Data as Record<string, unknown> | undefined;
@@ -225,10 +251,14 @@ function cardConfig(evt: ScoreEvent, fixtureLabel: string, allEvents: ScoreEvent
   if (GOALS.has(a)) {
     const score = scoreAtGoal(evt.raw);
     const title = a === "own_goal" ? "Own goal" : "Goal";
+    const scorer = playerName(players, num(data?.PlayerId ?? data?.playerId));
+    const assist = playerName(players, assistPlayerId(evt.raw));
     return {
       icon: <Icon icon={FootballIcon} size={18} />,
       title,
-      detail: [t, score].filter(Boolean).join("  ·  ") || t || undefined,
+      detail: [scorer ?? t, score].filter(Boolean).join("  ·  ") || t || undefined,
+      scorer,
+      assist,
       accent: "goal",
       verifiable: true,
     };
@@ -281,8 +311,10 @@ function cardConfig(evt: ScoreEvent, fixtureLabel: string, allEvents: ScoreEvent
 
   // ── Substitution ───────────────────────────────────────────────────────────
   if (a === "substitution") {
-    const pOut = str(data?.PlayerOutName ?? data?.PlayerOut ?? data?.OutPlayer);
-    const pIn  = str(data?.PlayerInName  ?? data?.PlayerIn  ?? data?.InPlayer);
+    const outId = num(data?.PlayerOutId ?? data?.playerOutId);
+    const inId = num(data?.PlayerInId ?? data?.playerInId);
+    const pOut = playerName(players, outId) ?? str(data?.PlayerOutName ?? data?.PlayerOut ?? data?.OutPlayer);
+    const pIn = playerName(players, inId) ?? str(data?.PlayerInName ?? data?.PlayerIn ?? data?.InPlayer);
     const detail = pOut && pIn ? `${pOut} → ${pIn}` : t ?? undefined;
     return {
       icon: <Icon icon={UserSwitchIcon} size={17} />,
@@ -352,16 +384,17 @@ function MarkerRow({
 
 /** A single key event row in the timeline */
 function EventRow({
-  evt, fixtureLabel, matchStartTime, allEvents,
+  evt, fixtureLabel, matchStartTime, allEvents, players,
   verifyState, verifyError, verifyResult,
   isExpanded, onVerify, onToggleExpand, onShare,
 }: {
   evt: ScoreEvent; fixtureLabel: string; matchStartTime?: number; allEvents: ScoreEvent[];
+  players: PlayerState[];
   verifyState: VerifyState; verifyError: VerifyError; verifyResult?: VerifyResult;
   isExpanded: boolean;
   onVerify(): void; onToggleExpand(): void; onShare(): void;
 }) {
-  const cfg = cardConfig(evt, fixtureLabel, allEvents);
+  const cfg = cardConfig(evt, fixtureLabel, allEvents, players);
   const min = minute(evt, matchStartTime);
   const clock = wallClock(evt.ts);
   const verified = verifyState === "verified";
@@ -470,6 +503,7 @@ function EventRow({
           <p className="mt-0.5 font-mono text-[10px] text-text-dimmer">Epoch day {verifyResult.epochDay}</p>
         </div>
       )}
+
     </li>
   );
 }
@@ -477,12 +511,15 @@ function EventRow({
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function EventFeed({
-  fixtureId, fixtureLabel, matchStartTime,
+  fixtureId, fixtureLabel, matchStartTime, players = [],
   onEventsChange, onLatestKeyAction, onMatchEnd, onGoal,
 }: {
   fixtureId: number;
   fixtureLabel: string;
   matchStartTime?: number;
+  /** Resolved roster (home + away) — used to show real scorer/assist/sub
+   * names instead of guessed field names where possible. */
+  players?: PlayerState[];
   onEventsChange?: (events: RawEvent[]) => void;
   onLatestKeyAction?: (action: string) => void;
   onMatchEnd?: () => void;
@@ -496,7 +533,11 @@ export function EventFeed({
   const [vstates, setVstates] = useState<Record<string, VerifyState>>({});
   const [vresults, setVresults] = useState<Record<string, VerifyResult>>({});
   const [verrors, setVerrors] = useState<Record<string, VerifyError>>({});
+  const [walletError, setWalletError] = useState<string | null>(null);
+
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  // ── auto-scroll to bottom (newest events are appended to the top, so we reverse rendering)
   const [connected, setConnected] = useState(false);
   const [loadState, setLoadState] = useState<"loading" | "done" | "error">("loading");
   const idxRef = useRef(0);
@@ -526,8 +567,23 @@ export function EventFeed({
       setVresults(s => ({ ...s, [evt.key]: result }));
       setVstates(s => ({ ...s, [evt.key]: result.verified ? "verified" : "failed" }));
     } catch (e) {
-      setVerrors(s => ({ ...s, [evt.key]: e instanceof Error ? e.message : "Failed" }));
+      const msg = e instanceof Error ? e.message : "Failed";
+      setVerrors(s => ({ ...s, [evt.key]: msg }));
       setVstates(s => ({ ...s, [evt.key]: "failed" }));
+      
+      // Check for common wallet connection issues (Phantom inject errors, disconnected states)
+      if (
+        !wallet.connected || 
+        msg.includes("Connect a wallet") || 
+        msg.includes("Receiving end does not exist") ||
+        msg.includes("User rejected")
+      ) {
+        setWalletError(
+          msg.includes("Connect") 
+            ? "Please connect your wallet first." 
+            : "We couldn't reach your wallet extension. Please ensure it's unlocked, or try refreshing the page."
+        );
+      }
     }
   }
 
@@ -565,7 +621,7 @@ export function EventFeed({
   // ── live stream and polling fallback ───────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
-    let es: EventSource | null = new EventSource("/api/txline/stream/scores");
+    const es: EventSource | null = new EventSource("/api/txline/stream/scores");
     let pollInterval: NodeJS.Timeout | null = null;
     let lastEventCount = 0;
 
@@ -584,9 +640,15 @@ export function EventFeed({
             const parsed = d.events.map((r, i) => parseEvent(r, idxRef.current + i));
             idxRef.current += d.events.length;
             
-            setEvents(prev => {
-               if (d.events.length === lastEventCount) return prev;
-               lastEventCount = d.events.length;
+            // Only act when the poll actually returned new data — this
+            // fetch re-pulls the FULL match history every 5s as a fallback,
+            // so calling onEventsChange unconditionally here re-sends the
+            // entire event list (hundreds of events) on every single tick,
+            // forever, to a parent that just appends without dedup.
+            if (d.events.length === lastEventCount) return;
+            lastEventCount = d.events.length;
+
+            setEvents(() => {
                const sorted = parsed.slice().sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
                return sorted;
             });
@@ -772,6 +834,7 @@ export function EventFeed({
                   fixtureLabel={fixtureLabel}
                   matchStartTime={matchStartTime}
                   allEvents={events}
+                  players={players}
                   verifyState={vstates[evt.key] ?? "idle"}
                   verifyError={verrors[evt.key] ?? null}
                   verifyResult={vresults[evt.key]}
@@ -779,11 +842,13 @@ export function EventFeed({
                   onVerify={() => verify(evt)}
                   onToggleExpand={() => setExpanded(s => ({ ...s, [evt.key]: !s[evt.key] }))}
                   onShare={() => {
-                    const cfg = cardConfig(evt, fixtureLabel, events);
+                    const cfg = cardConfig(evt, fixtureLabel, events, players);
                     const r = vresults[evt.key];
                     setShareMoment({
                       title: cfg.title,
                       detail: cfg.detail,
+                      scorer: cfg.scorer,
+                      assist: cfg.assist,
                       accent: cfg.accent,
                       fixtureLabel,
                       minuteLabel: minute(evt, matchStartTime) ?? undefined,
@@ -839,6 +904,13 @@ export function EventFeed({
       {shareMoment && (
         <ShareCardModal moment={shareMoment} onClose={() => setShareMoment(null)} />
       )}
+
+      {/* Wallet Error Modal */}
+      <WalletErrorModal 
+        isOpen={!!walletError} 
+        onClose={() => setWalletError(null)} 
+        message={walletError ?? undefined}
+      />
     </>
   );
 }

@@ -43,6 +43,7 @@ export function MatchModal({
           rounded-t-2xl border border-border bg-surface shadow-2xl shadow-black/80
           animate-slide-in-up
           sm:max-h-[90vh] sm:max-w-5xl sm:rounded-2xl
+          lg:max-w-6xl
           max-h-[88vh]
         "
         style={{ animationDuration: "0.28s" }}
