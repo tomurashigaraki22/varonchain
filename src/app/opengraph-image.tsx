@@ -131,6 +131,8 @@ export default function Image() {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div
               style={{
+                display: "flex",
+                flexDirection: "column",
                 fontFamily: "sans-serif",
                 fontSize: 72,
                 fontWeight: 800,
@@ -139,9 +141,12 @@ export default function Image() {
                 letterSpacing: "-0.02em",
               }}
             >
-              Every goal.{" "}
-              <span style={{ color: "#cdfe00" }}>Verified</span>
-              {"\n"}on-chain.
+              <div style={{ display: "flex" }}>
+                Every goal. <span style={{ color: "#818cf8", marginLeft: "16px" }}>Verified</span>
+              </div>
+              <div style={{ display: "flex" }}>
+                on-chain.
+              </div>
             </div>
             <div
               style={{
