@@ -5,6 +5,8 @@ import {
   cookieOptions,
   JWT_COOKIE,
 } from "@/lib/txline/server";
+import { setServiceCredentials } from "@/lib/telegram/credentials";
+import { ensureWatcherStarted } from "@/lib/telegram/watcher";
 
 export async function POST(req: NextRequest) {
   try {
@@ -23,6 +25,9 @@ export async function POST(req: NextRequest) {
       walletSignature,
       leagues: leagues ?? [],
     });
+
+    setServiceCredentials(jwt, apiToken);
+    ensureWatcherStarted();
 
     const res = NextResponse.json({ ok: true });
     res.cookies.set(JWT_COOKIE, jwt, cookieOptions);

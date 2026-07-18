@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { extractScore, extractPhase, type SoccerScore } from "@/lib/txline/scoreSoccer";
+import { TELEGRAM_BOT_USERNAME } from "@/lib/telegram/public";
 
 type RawScoreEvent = Record<string, unknown>;
 
@@ -96,6 +97,19 @@ export function MatchHeader({
             <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-text-dimmer">
               Scheduled
             </span>
+          </div>
+        )}
+
+        {fixtureId != null && (
+          <div className="mb-4 flex justify-center">
+            <a
+              href={`https://t.me/${TELEGRAM_BOT_USERNAME}?start=sub_${fixtureId}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-text-dim transition-colors hover:border-accent/40 hover:text-accent"
+            >
+              🔔 Get Telegram alerts
+            </a>
           </div>
         )}
 

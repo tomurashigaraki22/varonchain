@@ -162,7 +162,16 @@ export async function activateFreeTier(
 
   if (!activateRes.ok) {
     const body = await activateRes.text();
-    throw new Error(`Activation failed: ${body}`);
+    // A gateway/proxy in front of our own server (e.g. Cloudflare) can hand
+    // back an HTML error page instead of our JSON error when the origin
+    // hangs or crashes mid-request — surface that plainly instead of
+    // dumping the raw markup into the UI.
+    const looksLikeHtml = body.trim().startsWith("<!DOCTYPE") || body.trim().startsWith("<html");
+    throw new Error(
+      looksLikeHtml
+        ? "Activation failed: the server didn't respond in time. Please try again in a moment."
+        : `Activation failed: ${body}`
+    );
   }
 
   return { txSig };

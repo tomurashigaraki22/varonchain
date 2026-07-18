@@ -85,6 +85,62 @@ function mergeEvents(prev: ScoreEvent[], incoming: ScoreEvent[]): ScoreEvent[] {
 }
 
 /**
+ * TxLINE re-delivers a handful of action types (penalty_outcome,
+ * substitution, var/var_end, halftime_finalised, game_finalised) as
+ * provisional-then-corrected copies that DON'T share an Id/Seq — the
+ * documented action_amend mechanism (handled separately, above) doesn't
+ * cover this; these show up as genuinely distinct events by our stable key,
+ * so exact-key dedup can't catch them. Confirmed live: three
+ * "penalty_outcome" rows for the same team 87' apart by only ~2 minutes of
+ * Ts, and two identical "Substitution" rows one minute apart where the
+ * second simply has more resolved data than the first.
+ *
+ * This collapses same-action, same-team events that land within a short
+ * window into one — keeping whichever copy carries more Data (the more
+ * "complete" version tends to be the corrected one), but preserving the
+ * FIRST-SEEN key so any verify state already attached to it survives the
+ * merge instead of resetting to unverified.
+ */
+const NEAR_DUP_WINDOW_MS = 3 * 60 * 1000;
+const NEAR_DUP_ACTIONS = new Set([
+  "penalty_outcome", "substitution", "var", "var_end",
+  "halftime_finalised", "game_finalised",
+]);
+
+function dataFieldCount(raw: RawEvent): number {
+  const data = raw.Data ?? raw.data;
+  return data && typeof data === "object" ? Object.keys(data).length : 0;
+}
+
+function dedupeNearDuplicates(events: ScoreEvent[]): ScoreEvent[] {
+  const sorted = [...events].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+  const kept: ScoreEvent[] = [];
+
+  for (const e of sorted) {
+    const a = (e.action ?? "").toLowerCase();
+    if (!NEAR_DUP_ACTIONS.has(a)) {
+      kept.push(e);
+      continue;
+    }
+    const participant = num(e.raw.Participant ?? e.raw.participant);
+    const dupIdx = kept.findIndex((k) => {
+      if ((k.action ?? "").toLowerCase() !== a) return false;
+      if (num(k.raw.Participant ?? k.raw.participant) !== participant) return false;
+      return Math.abs((k.ts ?? 0) - (e.ts ?? 0)) <= NEAR_DUP_WINDOW_MS;
+    });
+    if (dupIdx === -1) {
+      kept.push(e);
+      continue;
+    }
+    if (dataFieldCount(e.raw) >= dataFieldCount(kept[dupIdx].raw)) {
+      kept[dupIdx] = { ...e, key: kept[dupIdx].key };
+    }
+  }
+
+  return kept.sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+}
+
+/**
  * Match minute from Clock.Seconds + StatusId.
  *
  * Confirmed against real captured data: Clock.Seconds is a SINGLE
@@ -835,12 +891,13 @@ export function EventFeed({
   }, [fixtureId]);
 
   // ── render ──────────────────────────────────────────────────────────────────
-  const timeline = events.filter(e => {
+  const reconciled = dedupeNearDuplicates(events);
+  const timeline = reconciled.filter(e => {
     const t = classify(e.action);
     return t === "key" || t === "marker";
   });
-  const activityList = events.filter(e => classify(e.action) === "activity");
-  const phase = extractPhase(events.map(e => e.raw));
+  const activityList = reconciled.filter(e => classify(e.action) === "activity");
+  const phase = extractPhase(reconciled.map(e => e.raw));
   const matchFinished = phase != null && !phase.live;
 
   return (
@@ -920,7 +977,7 @@ export function EventFeed({
                   evt={evt}
                   fixtureLabel={fixtureLabel}
                   matchStartTime={matchStartTime}
-                  allEvents={events}
+                  allEvents={reconciled}
                   players={players}
                   verifyState={vstates[evt.key] ?? "idle"}
                   verifyError={verrors[evt.key] ?? null}
@@ -930,7 +987,7 @@ export function EventFeed({
                   onVerify={() => verify(evt)}
                   onToggleExpand={() => setExpanded(s => ({ ...s, [evt.key]: !s[evt.key] }))}
                   onShare={() => {
-                    const cfg = cardConfig(evt, fixtureLabel, events, players);
+                    const cfg = cardConfig(evt, fixtureLabel, reconciled, players);
                     const r = vresults[evt.key];
                     setShareMoment({
                       title: cfg.title,
