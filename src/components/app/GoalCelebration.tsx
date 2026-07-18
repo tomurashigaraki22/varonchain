@@ -70,16 +70,16 @@ export function GoalCelebration({
       <div
         className="absolute h-[140%] w-[140%] animate-celebration-pulse rounded-full"
         style={{
-          background: "radial-gradient(circle, rgba(205,254,0,0.22) 0%, transparent 60%)",
+          background: "radial-gradient(circle, rgba(129,140,248,0.22) 0%, transparent 60%)",
         }}
         aria-hidden
       />
 
       <div className={`relative flex w-full max-w-xs flex-col px-8 ${alignment} animate-celebration-in`}>
-        <span className="flex h-14 w-14 items-center justify-center rounded-full border border-accent/40 bg-accent-dim shadow-[0_0_30px_rgba(205,254,0,0.35)]">
-          <Icon icon={FootballIcon} size={28} color="#cdfe00" />
+        <span className="flex h-14 w-14 items-center justify-center rounded-full border border-accent/40 bg-accent-dim shadow-[0_0_30px_rgba(129,140,248,0.35)]">
+          <Icon icon={FootballIcon} size={28} color="#818cf8" />
         </span>
-        <h2 className="mt-3 font-display text-4xl font-extrabold tracking-tight text-accent drop-shadow-[0_0_18px_rgba(205,254,0,0.5)]">
+        <h2 className="mt-3 font-display text-4xl font-extrabold tracking-tight text-accent drop-shadow-[0_0_18px_rgba(129,140,248,0.5)]">
           GOAL!
         </h2>
         {payload.teamName && (

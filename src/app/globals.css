@@ -1,19 +1,19 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #080808;
-  --surface: #0f0f0f;
-  --surface-2: #141414;
-  --surface-hover: #1a1a1a;
-  --border: rgba(255, 255, 255, 0.07);
-  --border-hover: rgba(205, 254, 0, 0.3);
-  --border-active: rgba(205, 254, 0, 0.25);
-  --text: #ffffff;
-  --text-dim: rgba(255, 255, 255, 0.4);
-  --text-dimmer: rgba(255, 255, 255, 0.2);
-  --accent: #cdfe00;
-  --accent-dim: rgba(205, 254, 0, 0.08);
-  --accent-glow: rgba(205, 254, 0, 0.15);
+  --bg: #121214;
+  --surface: #18181b;
+  --surface-2: #27272a;
+  --surface-hover: #3f3f46;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(129, 140, 248, 0.4);
+  --border-active: rgba(129, 140, 248, 0.3);
+  --text: #f4f4f5;
+  --text-dim: #a1a1aa;
+  --text-dimmer: #71717a;
+  --accent: #818cf8;
+  --accent-dim: rgba(129, 140, 248, 0.12);
+  --accent-glow: rgba(129, 140, 248, 0.2);
   --danger: #f87171;
   --warning: #fbbf24;
   --verified: #34d399;
@@ -62,7 +62,7 @@ button, a {
 
 ::selection {
   background: var(--accent);
-  color: #080808;
+  color: #ffffff;
 }
 
 /* ---------- Reusable visual primitives ---------- */
@@ -75,7 +75,7 @@ button, a {
 .bg-hero-glow {
   background: radial-gradient(
     ellipse 800px 600px at 30% 40%,
-    rgba(205, 254, 0, 0.06),
+    rgba(129, 140, 248, 0.08),
     transparent 70%
   );
 }
@@ -88,7 +88,7 @@ button, a {
 }
 
 .glow-accent-hover:hover {
-  box-shadow: 0 0 24px rgba(205, 254, 0, 0.25);
+  box-shadow: 0 0 24px rgba(129, 140, 248, 0.25);
 }
 
 @keyframes pulse-dot {

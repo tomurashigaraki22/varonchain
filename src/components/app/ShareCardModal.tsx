@@ -30,12 +30,12 @@ const ACCENT_THEME: Record<
   { glow: string; ring: string; text: string; badgeBorder: string; badgeBg: string; icon: string }
 > = {
   goal: {
-    glow: "rgba(205,254,0,0.16)",
+    glow: "rgba(129,140,248,0.16)",
     ring: "border-accent/30",
     text: "text-accent",
     badgeBorder: "border-accent/30",
     badgeBg: "bg-accent-dim",
-    icon: "#cdfe00",
+    icon: "#818cf8",
   },
   red: {
     glow: "rgba(248,113,113,0.16)",
@@ -62,7 +62,7 @@ const ACCENT_THEME: Record<
     icon: "#e5e5e5",
   },
   none: {
-    glow: "rgba(205,254,0,0.08)",
+    glow: "rgba(129,140,248,0.08)",
     ring: "border-border",
     text: "text-text",
     badgeBorder: "border-border",
@@ -95,7 +95,7 @@ export function ShareCardModal({
     QRCode.toDataURL(proofUrl, {
       width: 200,
       margin: 1,
-      color: { dark: "#080808", light: "#cdfe00" },
+      color: { dark: "#121214", light: "#818cf8" },
     })
       .then(setQrDataUrl)
       .catch(() => setQrDataUrl(null));
@@ -177,7 +177,7 @@ export function ShareCardModal({
             <div
               className="pointer-events-none absolute inset-0 -z-10"
               style={{
-                background: "radial-gradient(ellipse 120% 80% at 50% 0%, #141414 0%, #080808 55%)",
+                background: "radial-gradient(ellipse 120% 80% at 50% 0%, #27272a 0%, #121214 55%)",
               }}
               aria-hidden
             />
@@ -216,11 +216,11 @@ export function ShareCardModal({
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
                   <path
                     d="M12 2L4 5v6c0 5.2 3.4 9.4 8 11 4.6-1.6 8-5.8 8-11V5l-8-3z"
-                    stroke="#cdfe00" strokeWidth="2" strokeLinejoin="round"
+                    stroke="#818cf8" strokeWidth="2" strokeLinejoin="round"
                   />
                   <path
                     d="M8.5 12l2.5 2.5 4.5-4.5"
-                    stroke="#cdfe00" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                    stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                   />
                 </svg>
                 <span className="font-mono text-[10px] font-semibold uppercase tracking-widest text-accent">
@@ -291,7 +291,7 @@ export function ShareCardModal({
               disabled={downloading}
               className="flex flex-1 items-center justify-center gap-2 rounded-full bg-accent py-2.5 text-sm font-extrabold text-bg transition-shadow glow-accent-hover disabled:opacity-50"
             >
-              <Icon icon={Download01Icon} size={15} color="#080808" />
+              <Icon icon={Download01Icon} size={15} color="#ffffff" />
               {downloading ? "Generating…" : "Save image"}
             </button>
             <button

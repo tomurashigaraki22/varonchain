@@ -72,7 +72,7 @@ export function Rail({
     : "live";
 
   return (
-    <aside className="hidden w-[260px] shrink-0 border-r border-border bg-[#080808] lg:flex lg:flex-col">
+    <aside className="hidden w-[260px] shrink-0 border-r border-border bg-[#121214] lg:flex lg:flex-col">
       <div className="flex-1 overflow-y-auto p-5">
         {/* Wallet section */}
         <div>

@@ -69,7 +69,7 @@ export function MatchHeader({
         className="pointer-events-none absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse 60% 120% at 50% 100%, rgba(205,254,0,0.05), transparent 70%)",
+            "radial-gradient(ellipse 60% 120% at 50% 100%, rgba(129,140,248,0.05), transparent 70%)",
         }}
         aria-hidden
       />

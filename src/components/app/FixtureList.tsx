@@ -233,9 +233,9 @@ function FixtureCard({
         isMatchOfTheDay ? "p-6" : "p-4"
       } ${
         isSelected
-          ? "border-accent/40 bg-accent-dim shadow-[0_0_20px_rgba(205,254,0,0.08)]"
+          ? "border-accent/40 bg-accent-dim shadow-[0_0_20px_rgba(129,140,248,0.12)]"
           : isMatchOfTheDay
-          ? "border-accent/30 bg-surface shadow-[0_4px_20px_rgba(205,254,0,0.05)] hover:border-accent/60"
+          ? "border-accent/30 bg-surface shadow-[0_4px_20px_rgba(129,140,248,0.08)] hover:border-accent/60"
           : "glass border-border hover:border-border-hover hover:-translate-y-0.5 hover:shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
       }`}
     >

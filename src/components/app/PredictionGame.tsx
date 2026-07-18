@@ -368,13 +368,13 @@ export function PredictionGame({
                     >
                       <span
                         className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full font-mono text-[10px] font-bold ${
-                          i === 0 ? "bg-accent text-bg"
+                          i === 0 ? "bg-accent text-white"
                           : i === 1 ? "bg-white/20 text-text"
                           : i === 2 ? "bg-warning/30 text-warning"
                           : "bg-surface-2 text-text-dimmer"
                         }`}
                       >
-                        {i === 0 ? <Icon icon={CrownIcon} size={12} color={i === 0 ? "#080808" : "currentColor"} />
+                        {i === 0 ? <Icon icon={CrownIcon} size={12} color={i === 0 ? "#ffffff" : "currentColor"} />
                          : i === 1 ? <Icon icon={Medal01Icon} size={12} />
                          : i === 2 ? <Icon icon={Award01Icon} size={12} />
                          : <span className="font-mono text-[10px]">{i + 1}</span>}

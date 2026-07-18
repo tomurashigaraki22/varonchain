@@ -143,7 +143,7 @@ export function OddsSparkline({ fixtureId }: { fixtureId: number }) {
                 d={`${sparkPath(series[0].points, W, H, min, max)} V${H} H${
                   ((MAX_POINTS - series[0].points.length) * W) / (MAX_POINTS - 1)
                 } Z`}
-                fill="rgba(205,254,0,0.05)"
+                fill="rgba(129,140,248,0.05)"
                 stroke="none"
               />
             )}
@@ -159,6 +159,20 @@ export function OddsSparkline({ fixtureId }: { fixtureId: number }) {
                 strokeLinejoin="round"
               />
             ))}
+            {/* pulse dot for active series */}
+            {series[0].points.length > 0 && (
+              <circle
+                cx={((MAX_POINTS - 1) * W) / (MAX_POINTS - 1)}
+                cy={
+                  H -
+                  ((series[0].points[series[0].points.length - 1] - min) / (max - min || 1)) *
+                    H
+                }
+                r={2.5}
+                fill="#818cf8"
+                className="animate-pulse-dot"
+              />
+            )}
           </svg>
 
           {/* Probability bar */}

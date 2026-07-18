@@ -7,7 +7,7 @@ export function CTABanner() {
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse 700px 400px at 50% 50%, rgba(205,254,0,0.06), transparent 70%)",
+            "radial-gradient(ellipse 700px 400px at 50% 50%, rgba(129,140,248,0.06), transparent 70%)",
         }}
         aria-hidden
       />

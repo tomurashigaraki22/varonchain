@@ -13,7 +13,7 @@ export default function Image() {
           height: "100%",
           display: "flex",
           flexDirection: "column",
-          background: "#080808",
+          background: "#121214",
           position: "relative",
           overflow: "hidden",
         }}
@@ -34,7 +34,7 @@ export default function Image() {
             position: "absolute",
             inset: 0,
             background:
-              "radial-gradient(ellipse 900px 700px at 20% 60%, rgba(205,254,0,0.10), transparent 70%)",
+              "radial-gradient(ellipse 900px 700px at 20% 60%, rgba(129,140,248,0.10), transparent 70%)",
           }}
         />
         {/* Corner glow accent */}
@@ -46,7 +46,7 @@ export default function Image() {
             width: 420,
             height: 420,
             borderRadius: "50%",
-            background: "radial-gradient(circle, rgba(205,254,0,0.08) 0%, transparent 70%)",
+            background: "radial-gradient(circle, rgba(129,140,248,0.08) 0%, transparent 70%)",
           }}
         />
 
