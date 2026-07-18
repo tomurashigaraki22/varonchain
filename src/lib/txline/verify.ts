@@ -104,10 +104,10 @@ export async function validateStatsOnChain(
   const strategy = {
     geometricTargets: [],
     distancePredicate: null,
-    discretePredicates: val.statsToProve.map((_, index) => ({
+    discretePredicates: val.statsToProve.map((statObj, index) => ({
       single: {
         index,
-        predicate: { threshold: 0, comparison: { greaterThan: {} } },
+        predicate: { threshold: statObj.value, comparison: { equalTo: {} } },
       },
     })),
   };
