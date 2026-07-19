@@ -1,10 +1,48 @@
-import { fetchGuestJwt, openTxlineStream } from "../txline/server";
+import { fetchGuestJwt, openTxlineStream, txlineDataFetch } from "../txline/server";
 import { getServiceCredentials } from "./credentials";
 import { sendTelegramMessage } from "./api";
 import { formatEvent, getRoster } from "./events";
-import { chatsForFixture, fixtureMeta, hasSeenEvent, markEventSeen } from "./store";
+import { chatsForFixture, fixtureMeta, hasSeenEvent, markEventSeen, watchedFixtureIds } from "./store";
 
 type RawEvent = Record<string, unknown>;
+
+const POLL_MS = 5000;
+
+type WatcherState = {
+  startedAt: number | null;
+  hasCredentials: boolean;
+  streamConnectedAt: number | null;
+  streamLastError: string | null;
+  pollLastRunAt: number | null;
+  pollLastError: string | null;
+  eventsHandled: number;
+  lastEventAt: number | null;
+};
+
+const g2 = globalThis as unknown as { __vcTelegramWatcherState?: WatcherState };
+function watcherState(): WatcherState {
+  if (!g2.__vcTelegramWatcherState) {
+    g2.__vcTelegramWatcherState = {
+      startedAt: null,
+      hasCredentials: false,
+      streamConnectedAt: null,
+      streamLastError: null,
+      pollLastRunAt: null,
+      pollLastError: null,
+      eventsHandled: 0,
+      lastEventAt: null,
+    };
+  }
+  return g2.__vcTelegramWatcherState;
+}
+
+/** For /api/telegram/debug — lets you see what the watcher is actually doing instead of guessing from logs. */
+export function getWatcherDebugState() {
+  return {
+    ...watcherState(),
+    watchedFixtureIds: watchedFixtureIds(),
+  };
+}
 
 function num(v: unknown): number | undefined {
   if (typeof v === "number") return v;
@@ -43,6 +81,10 @@ async function handleRawEvent(raw: RawEvent) {
 
   const text = `${formatted.emoji} <b>${meta.home} vs ${meta.away}</b>\n${formatted.text}`;
   await Promise.all(chats.map((chatId) => sendTelegramMessage(chatId, text)));
+
+  const s = watcherState();
+  s.eventsHandled += 1;
+  s.lastEventAt = Date.now();
 }
 
 function parseSseBlock(block: string): RawEvent | null {
@@ -67,10 +109,13 @@ async function runStreamOnce(): Promise<void> {
     upstream = await openTxlineStream("/scores/stream", renewedJwt, creds.apiToken);
   }
   if (!upstream.ok || !upstream.body) {
-    console.error("telegram watcher: upstream scores stream failed", upstream.status);
+    const msg = `upstream scores stream failed: ${upstream.status}`;
+    console.error("telegram watcher:", msg);
+    watcherState().streamLastError = msg;
     return;
   }
 
+  watcherState().streamConnectedAt = Date.now();
   const reader = upstream.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -90,28 +135,80 @@ async function runStreamOnce(): Promise<void> {
   }
 }
 
+/**
+ * Polling fallback — proven necessary elsewhere in this app (EventFeed, the
+ * Arena engine): TxLINE's devnet SSE stream can connect successfully and
+ * then sit silently empty without ever erroring, so relying on the raw
+ * stream alone is exactly the kind of thing that "no alerts ever arrive"
+ * bugs come from. Every 5s, re-pull each watched fixture's current snapshot
+ * and feed it through the same handleRawEvent path — hasSeenEvent/
+ * markEventSeen already dedupe against whatever the stream also delivered,
+ * so running both concurrently is safe.
+ */
+async function pollOnce(): Promise<void> {
+  const creds = getServiceCredentials();
+  if (!creds) return;
+
+  const fixtureIds = watchedFixtureIds();
+  if (fixtureIds.length === 0) return;
+
+  await Promise.all(
+    fixtureIds.map(async (fixtureId) => {
+      try {
+        const { body } = await txlineDataFetch(`/scores/snapshot/${fixtureId}`, creds.jwt, creds.apiToken);
+        if (Array.isArray(body)) {
+          for (const row of body as RawEvent[]) {
+            await handleRawEvent(row);
+          }
+        }
+      } catch (err) {
+        watcherState().pollLastError = err instanceof Error ? err.message : String(err);
+        console.error("telegram watcher: poll failed for fixture", fixtureId, err);
+      }
+    })
+  );
+
+  watcherState().pollLastRunAt = Date.now();
+}
+
 const g = globalThis as unknown as { __vcTelegramWatcherStarted?: boolean };
 
 /**
  * Starts (once per process) a persistent read loop over TxLINE's
- * `/scores/stream` SSE feed and fans out notify-worthy events to whichever
- * Telegram chats are subscribed to that fixture. Safe to call repeatedly —
- * only the first call has any effect. Reconnects with backoff on drop, and
- * simply idles (retrying every 10s) until an app activation supplies
- * service credentials via setServiceCredentials().
+ * `/scores/stream` SSE feed PLUS a polling fallback, fanning out
+ * notify-worthy events to whichever Telegram chats are subscribed to that
+ * fixture. Safe to call repeatedly — only the first call has any effect.
+ * Reconnects with backoff on drop, and simply idles until an app activation
+ * supplies service credentials via setServiceCredentials().
  */
 export function ensureWatcherStarted(): void {
   if (g.__vcTelegramWatcherStarted) return;
   g.__vcTelegramWatcherStarted = true;
+
+  const s = watcherState();
+  s.startedAt = Date.now();
+  s.hasCredentials = getServiceCredentials() != null;
 
   (async () => {
     for (;;) {
       try {
         await runStreamOnce();
       } catch (err) {
+        watcherState().streamLastError = err instanceof Error ? err.message : String(err);
         console.error("telegram watcher: stream loop error", err);
       }
       await new Promise((r) => setTimeout(r, 10_000));
+    }
+  })();
+
+  (async () => {
+    for (;;) {
+      try {
+        await pollOnce();
+      } catch (err) {
+        console.error("telegram watcher: poll loop error", err);
+      }
+      await new Promise((r) => setTimeout(r, POLL_MS));
     }
   })();
 }

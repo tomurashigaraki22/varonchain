@@ -117,7 +117,10 @@ export function formatEvent(
       const who = playerName(roster, data.PlayerId) ?? "A player";
       return { emoji: "🟥", text: `RED CARD — ${who}` };
     }
-    case "penalty_awarded":
+    // Confirmed real action name from EventFeed.tsx's own live-data
+    // classification is "penalty" (award), not "penalty_awarded" — that
+    // guessed name meant this case never matched a real event.
+    case "penalty":
       return { emoji: "🎯", text: "Penalty awarded!" };
     case "penalty_outcome": {
       const outcome = str(data.Outcome) ?? "resolved";
