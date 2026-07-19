@@ -65,7 +65,12 @@ export async function getRoster(
   } catch {
     // Best-effort — notifications still go out without a resolved name.
   }
-  rosterCache.set(fixtureId, roster);
+  // Only cache a non-empty roster. A card/goal can arrive right at kickoff,
+  // before TxLINE's snapshot has lineups populated yet — caching an empty
+  // result here would permanently lock every notification for the rest of
+  // the match onto "A player" even once the roster becomes available
+  // seconds later. An empty result just means "try again next event."
+  if (roster.size > 0) rosterCache.set(fixtureId, roster);
   return roster;
 }
 
