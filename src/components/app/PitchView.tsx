@@ -226,7 +226,7 @@ export function PitchView({ home, away }: { home: PlayerState[]; away: PlayerSta
       </div>
 
       <div
-        className="relative w-full overflow-hidden rounded-xl border border-border"
+        className="relative mx-auto w-full overflow-hidden rounded-xl border border-border lg:max-h-[56vh]"
         style={{ aspectRatio: "16 / 10", background: "radial-gradient(ellipse 90% 70% at 50% 50%, #10130f 0%, #0a0c09 70%)" }}
       >
       {/* Pitch markings */}

@@ -1,79 +1,38 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppNavbar } from "@/components/app/AppNavbar";
 import { ActivationPanel } from "@/components/ActivationPanel";
 import { FeaturedMatch } from "@/components/app/FeaturedMatch";
 import { FixtureList } from "@/components/app/FixtureList";
-import { MatchHeader } from "@/components/app/MatchHeader";
-import { EventFeed } from "@/components/app/EventFeed";
-import { OddsSparkline } from "@/components/app/OddsSparkline";
-import { MatchModal } from "@/components/app/MatchModal";
-import { PredictionGame } from "@/components/app/PredictionGame";
-import { CrowdPulseTrader } from "@/components/app/CrowdPulseTrader";
-import { LineupPanel } from "@/components/app/LineupPanel";
-import { GoalCelebration, type CelebrationPayload } from "@/components/app/GoalCelebration";
 import { StadiumBackground } from "@/components/landing/StadiumBackground";
 import { useFixtures, type Fixture } from "@/lib/hooks/useFixtures";
 import { useActivationStatus } from "@/lib/hooks/useActivationStatus";
-import { extractPhase } from "@/lib/txline/scoreSoccer";
-import { usePlayerLineups } from "@/lib/txline/lineups";
-
-type RawScoreEvent = Record<string, unknown>;
 
 export default function AppPage() {
+  const router = useRouter();
   const serverStatus = useActivationStatus();
   const [localActivated, setLocalActivated] = useState(false);
   const [txSig, setTxSig] = useState<string | null>(null);
-  const [selectedFixture, setSelectedFixture] = useState<{
-    id: number;
-    label: string;
-    raw: Fixture;
-  } | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [matchEvents, setMatchEvents] = useState<RawScoreEvent[]>([]);
-  const [latestKeyAction, setLatestKeyAction] = useState<string | undefined>();
-  const [matchEnded, setMatchEnded] = useState(false);
-  const [celebration, setCelebration] = useState<CelebrationPayload | null>(null);
+  const [selectedFixtureId, setSelectedFixtureId] = useState<number | undefined>();
 
   const activated = serverStatus === "activated" || localActivated;
   const { fixtures, loading, error } = useFixtures(activated);
-  const { home: homeLineup, away: awayLineup, announced: lineupsAnnounced } = usePlayerLineups(
-    selectedFixture?.id ?? 0,
-    selectedFixture?.label ?? "",
-    matchEvents
+
+  // Tracking a fixture now opens a full page (/app/play/[fixtureId]) instead
+  // of an in-page modal — label/kickoff time are passed via query params so
+  // the play layout doesn't need a second fetch just to render the header.
+  const handleSelectFixture = useCallback(
+    (fixture: { id: number; label: string; raw: Fixture }) => {
+      setSelectedFixtureId(fixture.id);
+      const startTime = Number(fixture.raw.StartTime ?? 0);
+      const params = new URLSearchParams({ label: fixture.label });
+      if (startTime > 0) params.set("start", String(startTime));
+      router.push(`/app/play/${fixture.id}?${params.toString()}`);
+    },
+    [router]
   );
-
-  const handleSelectFixture = useCallback((fixture: { id: number; label: string; raw: Fixture }) => {
-    setSelectedFixture(fixture);
-    setMatchEvents([]);
-    setLatestKeyAction(undefined);
-    // Best-effort initial guess (kickoff more than ~3h ago) — EventFeed
-    // corrects this once real events/history load, since fixtures/snapshot
-    // carries no actual status field to check against.
-    const startTime = Number(fixture.raw.StartTime ?? 0);
-    const LIKELY_LIVE_WINDOW = 3 * 60 * 60 * 1000;
-    setMatchEnded(startTime > 0 && Date.now() - startTime > LIKELY_LIVE_WINDOW);
-    setModalOpen(true);
-  }, []);
-
-  const handleEventsChange = useCallback((events: RawScoreEvent[]) => {
-    // EventFeed's polling fallback re-sends the full match history on every
-    // poll tick (not just deltas), so this has to dedupe by a stable key
-    // rather than blindly appending — otherwise the same events pile up
-    // repeatedly for as long as the modal stays open.
-    setMatchEvents((prev) => {
-      const keyOf = (e: RawScoreEvent) => `${e.FixtureId ?? e.fixtureId}-${e.Seq ?? e.seq ?? e.Id ?? e.id}`;
-      const seen = new Set(prev.map(keyOf));
-      const additions = events.filter((e) => {
-        const key = keyOf(e);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      return additions.length > 0 ? [...prev, ...additions] : prev;
-    });
-  }, []);
 
   const isChecking = serverStatus === "checking";
 
@@ -170,64 +129,11 @@ export default function AppPage() {
             fixtures={fixtures}
             loading={activated ? loading : false}
             error={activated ? error : null}
-            selectedFixtureId={selectedFixture?.id}
+            selectedFixtureId={selectedFixtureId}
             onSelect={handleSelectFixture}
           />
         </div>
       </main>
-
-      {/* Match modal */}
-      {modalOpen && selectedFixture && (
-        <MatchModal
-          title={selectedFixture.label}
-          isLive={extractPhase(matchEvents)?.live ?? false}
-          onClose={() => setModalOpen(false)}
-          header={
-            <MatchHeader
-              label={selectedFixture.label}
-              fixtureId={selectedFixture.id}
-              events={matchEvents}
-            />
-          }
-        >
-          <div className="grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] lg:divide-x lg:divide-border">
-            {/* Left: lineups / pitch */}
-            <div>
-              <LineupPanel home={homeLineup} away={awayLineup} announced={lineupsAnnounced} />
-              <div className="hidden lg:block">
-                <OddsSparkline fixtureId={selectedFixture.id} />
-              </div>
-            </div>
-
-            {/* Right: live events + games */}
-            <div>
-              <div className="lg:hidden">
-                <OddsSparkline fixtureId={selectedFixture.id} />
-              </div>
-              <EventFeed
-                fixtureId={selectedFixture.id}
-                fixtureLabel={selectedFixture.label}
-                matchStartTime={Number(selectedFixture.raw.StartTime ?? 0) || undefined}
-                players={[...homeLineup, ...awayLineup]}
-                onEventsChange={handleEventsChange}
-                onLatestKeyAction={setLatestKeyAction}
-                onMatchEnd={() => setMatchEnded(true)}
-                onGoal={setCelebration}
-              />
-              <PredictionGame
-                fixtureId={selectedFixture.id}
-                latestAction={latestKeyAction}
-                matchEnded={matchEnded}
-              />
-              <CrowdPulseTrader fixtureId={selectedFixture.id} />
-            </div>
-          </div>
-        </MatchModal>
-      )}
-
-      {celebration && (
-        <GoalCelebration payload={celebration} onDone={() => setCelebration(null)} />
-      )}
     </div>
   );
 }

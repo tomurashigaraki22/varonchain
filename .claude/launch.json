@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "arena-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "C:\\Users\\HP\\Desktop\\autonomous_txline", "run", "dev", "--", "-p", "3001"],
+      "port": 3001
+    },
+    {
+      "name": "hackathon-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "-p", "3002"],
+      "port": 3002
+    }
+  ]
+}

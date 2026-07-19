@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useNow } from "@/lib/hooks/useNow";
+import { usePlayContext } from "@/lib/playContext";
 import { Icon } from "@/components/ui/Icon";
 import {
   FootballIcon,
@@ -86,15 +87,18 @@ function PredictionBadge({ p, now }: { p: Prediction; now: number }) {
   );
 }
 
-export function PredictionGame({
-  fixtureId,
-  latestAction,
-  matchEnded = false,
-}: {
-  fixtureId: number;
-  latestAction?: string;
-  matchEnded?: boolean;
-}) {
+/**
+ * `view="arena"` renders the play surface (predict buttons + everyone's
+ * live in-flight calls). `view="leaderboard"` renders just the ranking.
+ * These used to be an in-component tab switcher; they're real routes now
+ * (/app/play/[id]/arena, /app/play/[id]/leaderboard), each mounting this
+ * component with a different view — fixtureId/latestKeyAction/matchEnded
+ * come from the play layout's context instead of props since EventFeed
+ * (which produces latestKeyAction) no longer lives on the same page as
+ * this component.
+ */
+export function PredictionGame({ view }: { view: "arena" | "leaderboard" }) {
+  const { fixtureId, latestKeyAction: latestAction, matchEnded } = usePlayContext();
   const { publicKey } = useWallet();
   const wallet = publicKey?.toBase58() ?? null;
   const now = useNow();
@@ -104,7 +108,6 @@ export function PredictionGame({
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [cooldown, setCooldown] = useState(false);
-  const [tab, setTab] = useState<"predict" | "arena" | "leaderboard">("predict");
   const lastResolvedAction = useRef<string | null>(null);
 
   // Fetch predictions on mount and on fixture change, then poll so the
@@ -197,46 +200,166 @@ export function PredictionGame({
     .filter((p) => p.resolvedCorrect == null && now - p.ts <= PREDICTION_TTL_MS)
     .sort((a, b) => b.ts - a.ts);
 
+  if (view === "leaderboard") {
+    return (
+      <div>
+        <div className="flex items-center justify-between border-b border-border bg-surface-2/60 px-4 py-3 sm:px-6">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-text-dim">
+            Prediction Leaderboard
+          </span>
+          {wallet && myPoints > 0 && (
+            <span className="font-mono text-[10px] font-semibold text-accent">{myPoints} pts</span>
+          )}
+        </div>
+        <div className="px-4 py-4 sm:px-6">
+          {leaderboard.length === 0 ? (
+            <p className="text-center text-xs text-text-dim">No predictions yet — be the first!</p>
+          ) : (
+            <ol className="flex flex-col gap-1.5">
+              {leaderboard.map((entry, i) => {
+                const isMe = entry.wallet === wallet;
+                return (
+                  <li
+                    key={entry.wallet}
+                    className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 ${
+                      isMe ? "border-accent/20 bg-accent-dim" : "border-border bg-surface"
+                    }`}
+                  >
+                    <span
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full font-mono text-[10px] font-bold ${
+                        i === 0 ? "bg-accent text-white"
+                        : i === 1 ? "bg-white/20 text-text"
+                        : i === 2 ? "bg-warning/30 text-warning"
+                        : "bg-surface-2 text-text-dimmer"
+                      }`}
+                    >
+                      {i === 0 ? <Icon icon={CrownIcon} size={12} color={i === 0 ? "#ffffff" : "currentColor"} />
+                       : i === 1 ? <Icon icon={Medal01Icon} size={12} />
+                       : i === 2 ? <Icon icon={Award01Icon} size={12} />
+                       : <span className="font-mono text-[10px]">{i + 1}</span>}
+                    </span>
+                    <span className={`flex-1 truncate font-mono text-xs ${isMe ? "text-accent" : "text-text-dim"}`}>
+                      {isMe ? "You" : truncate(entry.wallet)}
+                    </span>
+                    <span className={`shrink-0 font-mono text-xs font-semibold ${isMe ? "text-accent" : "text-text"}`}>
+                      {entry.points} pts
+                    </span>
+                    <span className="shrink-0 font-mono text-[10px] text-text-dimmer">
+                      {entry.predictions} pred.
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="border-t border-border">
+    <div>
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border bg-surface-2/60 px-4 py-3 sm:px-6">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-widest text-text-dim">
-            Predict
-          </span>
+          <span className="font-mono text-[10px] uppercase tracking-widest text-text-dim">Predict</span>
           <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[9px] text-text-dimmer">
             Free to play
           </span>
         </div>
         {wallet && myPoints > 0 && (
-          <span className="font-mono text-[10px] font-semibold text-accent">
-            {myPoints} pts
-          </span>
+          <span className="font-mono text-[10px] font-semibold text-accent">{myPoints} pts</span>
         )}
       </div>
 
-      {/* Tab switcher */}
-      <div className="flex border-b border-border">
-        {(["predict", "arena", "leaderboard"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`flex-1 py-2.5 font-mono text-[10px] uppercase tracking-widest transition-colors ${
-              tab === t
-                ? "border-b-2 border-accent text-accent"
-                : "text-text-dimmer hover:text-text-dim"
-            }`}
-          >
-            {t === "predict" ? "Predict" : t === "arena" ? `Arena${arena.length ? ` (${arena.length})` : ""}` : "Leaderboard"}
-          </button>
-        ))}
+      <div className="px-4 py-4 sm:px-6">
+        {!wallet ? (
+          <p className="text-center text-xs text-text-dim">Connect your wallet to make predictions.</p>
+        ) : matchEnded ? (
+          <div className="rounded-xl border border-border bg-surface px-4 py-6 text-center">
+            <p className="text-sm font-semibold text-text">Match finished</p>
+            <p className="mt-1 text-xs text-text-dim">
+              Predictions are locked — the game has ended.
+              {myPoints > 0 && ` You scored ${myPoints} pts.`}
+            </p>
+            {myPredictions.length > 0 && (
+              <div className="mt-4 text-left">
+                <p className="mb-2 font-mono text-[9px] uppercase tracking-widest text-text-dimmer">
+                  Your predictions
+                </p>
+                <div className="flex flex-col gap-1.5">
+                  {myPredictions.slice(0, 5).map((p) => (
+                    <PredictionBadge key={p.id} p={p} now={now} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Prediction buttons */}
+            <p className="mb-3 text-xs text-text-dim">
+              {cooldown
+                ? "Prediction locked — wait 30s before your next guess."
+                : pending.length > 0
+                ? `Prediction active — waiting for a ${pending[0].type}…`
+                : "What happens next?"}
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {PREDICTION_OPTIONS.map((opt) => {
+                const hasPending = pending.some((p) => p.type === opt.type);
+                const disabled = submitting || cooldown || hasPending;
+                return (
+                  <button
+                    key={opt.type}
+                    onClick={() => submit(opt.type)}
+                    disabled={disabled}
+                    className={`flex items-center gap-2.5 rounded-xl border px-4 py-3 text-sm font-semibold transition-all ${
+                      hasPending
+                        ? "border-accent/30 bg-accent-dim text-accent"
+                        : disabled
+                        ? "border-border bg-surface text-text-dimmer opacity-50"
+                        : "border-border bg-surface text-text hover:border-accent/30 hover:bg-accent-dim hover:text-accent"
+                    }`}
+                  >
+                    <span className="flex h-5 w-5 items-center justify-center" aria-hidden>
+                      {opt.icon}
+                    </span>
+                    <span>{opt.label}</span>
+                    {hasPending && (
+                      <span className="ml-auto h-1.5 w-1.5 animate-pulse-dot rounded-full bg-accent" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Recent predictions */}
+            {myPredictions.length > 0 && (
+              <div className="mt-4">
+                <p className="mb-2 font-mono text-[9px] uppercase tracking-widest text-text-dimmer">
+                  Your predictions
+                </p>
+                <div className="flex flex-col gap-1.5">
+                  {myPredictions.slice(0, 5).map((p) => (
+                    <PredictionBadge key={p.id} p={p} now={now} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
-      <div className="px-4 py-4 sm:px-6">
-        {tab === "arena" ? (
-          /* Arena tab — everyone's live pending calls, wallet vs wallet */
-          arena.length === 0 ? (
+      {/* Arena — everyone's live in-flight calls, wallet vs wallet */}
+      <div className="border-t border-border">
+        <div className="border-b border-border bg-surface-2/60 px-4 py-3 sm:px-6">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-text-dim">
+            Arena{arena.length ? ` · ${arena.length} live` : ""}
+          </span>
+        </div>
+        <div className="px-4 py-4 sm:px-6">
+          {arena.length === 0 ? (
             <p className="text-center text-xs text-text-dim">
               No live calls right now — be the first to predict.
             </p>
@@ -264,141 +387,8 @@ export function PredictionGame({
                 );
               })}
             </ul>
-          )
-        ) : tab === "predict" ? (
-          <>
-            {!wallet ? (
-              <p className="text-center text-xs text-text-dim">
-                Connect your wallet to make predictions.
-              </p>
-            ) : matchEnded ? (
-              <div className="rounded-xl border border-border bg-surface px-4 py-6 text-center">
-                <p className="text-sm font-semibold text-text">Match finished</p>
-                <p className="mt-1 text-xs text-text-dim">
-                  Predictions are locked — the game has ended.
-                  {myPoints > 0 && ` You scored ${myPoints} pts.`}
-                </p>
-                {myPredictions.length > 0 && (
-                  <div className="mt-4 text-left">
-                    <p className="mb-2 font-mono text-[9px] uppercase tracking-widest text-text-dimmer">
-                      Your predictions
-                    </p>
-                    <div className="flex flex-col gap-1.5">
-                      {myPredictions.slice(0, 5).map((p) => (
-                        <PredictionBadge key={p.id} p={p} now={now} />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <>
-                {/* Prediction buttons */}
-                <p className="mb-3 text-xs text-text-dim">
-                  {cooldown
-                    ? "Prediction locked — wait 30s before your next guess."
-                    : pending.length > 0
-                    ? `Prediction active — waiting for a ${pending[0].type}…`
-                    : "What happens next?"}
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  {PREDICTION_OPTIONS.map((opt) => {
-                    const hasPending = pending.some((p) => p.type === opt.type);
-                    const disabled = submitting || cooldown || hasPending;
-                    return (
-                      <button
-                        key={opt.type}
-                        onClick={() => submit(opt.type)}
-                        disabled={disabled}
-                        className={`flex items-center gap-2.5 rounded-xl border px-4 py-3 text-sm font-semibold transition-all ${
-                          hasPending
-                            ? "border-accent/30 bg-accent-dim text-accent"
-                            : disabled
-                            ? "border-border bg-surface text-text-dimmer opacity-50"
-                            : "border-border bg-surface text-text hover:border-accent/30 hover:bg-accent-dim hover:text-accent"
-                        }`}
-                      >
-                        <span className="flex h-5 w-5 items-center justify-center" aria-hidden>
-                          {opt.icon}
-                        </span>
-                        <span>{opt.label}</span>
-                        {hasPending && (
-                          <span className="ml-auto h-1.5 w-1.5 animate-pulse-dot rounded-full bg-accent" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Recent predictions */}
-                {myPredictions.length > 0 && (
-                  <div className="mt-4">
-                    <p className="mb-2 font-mono text-[9px] uppercase tracking-widest text-text-dimmer">
-                      Your predictions
-                    </p>
-                    <div className="flex flex-col gap-1.5">
-                      {myPredictions.slice(0, 5).map((p) => (
-                        <PredictionBadge key={p.id} p={p} now={now} />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </>
-        ) : (
-          /* Leaderboard tab */
-          <>
-            {leaderboard.length === 0 ? (
-              <p className="text-center text-xs text-text-dim">
-                No predictions yet — be the first!
-              </p>
-            ) : (
-              <ol className="flex flex-col gap-1.5">
-                {leaderboard.map((entry, i) => {
-                  const isMe = entry.wallet === wallet;
-                  return (
-                    <li
-                      key={entry.wallet}
-                      className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 ${
-                        isMe
-                          ? "border-accent/20 bg-accent-dim"
-                          : "border-border bg-surface"
-                      }`}
-                    >
-                      <span
-                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full font-mono text-[10px] font-bold ${
-                          i === 0 ? "bg-accent text-white"
-                          : i === 1 ? "bg-white/20 text-text"
-                          : i === 2 ? "bg-warning/30 text-warning"
-                          : "bg-surface-2 text-text-dimmer"
-                        }`}
-                      >
-                        {i === 0 ? <Icon icon={CrownIcon} size={12} color={i === 0 ? "#ffffff" : "currentColor"} />
-                         : i === 1 ? <Icon icon={Medal01Icon} size={12} />
-                         : i === 2 ? <Icon icon={Award01Icon} size={12} />
-                         : <span className="font-mono text-[10px]">{i + 1}</span>}
-                      </span>
-                      <span
-                        className={`flex-1 truncate font-mono text-xs ${
-                          isMe ? "text-accent" : "text-text-dim"
-                        }`}
-                      >
-                        {isMe ? "You" : truncate(entry.wallet)}
-                      </span>
-                      <span className={`shrink-0 font-mono text-xs font-semibold ${isMe ? "text-accent" : "text-text"}`}>
-                        {entry.points} pts
-                      </span>
-                      <span className="shrink-0 font-mono text-[10px] text-text-dimmer">
-                        {entry.predictions} pred.
-                      </span>
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-          </>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
