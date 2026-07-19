@@ -16,7 +16,7 @@ export default function LandingPage() {
         <StatsBar />
         <HowItWorks />
         <FeatureBento />
-        <TerminalProof />
+        {/* <TerminalProof /> */}
         <CTABanner />
       </main>
       <Footer />

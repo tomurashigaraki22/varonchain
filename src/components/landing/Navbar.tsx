@@ -1,41 +1,28 @@
 import Link from "next/link";
+import { StartWatchingButton } from "./StartWatching";
 
 export function Navbar() {
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-[rgba(8,8,8,0.85)] backdrop-blur-md">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5">
-        <div className="flex items-center gap-3">
-          <span className="hidden items-center gap-1.5 rounded-full border border-border px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-text-dim sm:flex">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-pulse-dot rounded-full bg-accent" />
-            </span>
-            Live · TxLINE
-          </span>
-        </div>
-
+    <header className="sticky top-0 py-5 z-50 border-b border-border bg-[rgba(8,8,8,0.85)] backdrop-blur-md">
+      <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3.5">
         <Link
           href="/"
           className="flex items-center gap-1.5 font-display text-sm font-bold tracking-tight text-text"
         >
           <svg
-            width="16"
-            height="16"
+            width="18"
+            height="18"
             viewBox="0 0 24 24"
             fill="none"
             className="text-accent"
           >
+            <circle cx="12" cy="12" r="9.5" stroke="currentColor" strokeWidth="1.6" />
             <path
-              d="M12 2L4 5v6c0 5.2 3.4 9.4 8 11 4.6-1.6 8-5.8 8-11V5l-8-3z"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinejoin="round"
+              d="M12 6.2 15.4 8.7 14.1 12.7H9.9L8.6 8.7 12 6.2Z"
+              stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"
             />
-            <path
-              d="M8.5 12l2.5 2.5 4.5-4.5"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+            <path d="M12 6.2V3.4M14.1 12.7l2.4 1.9M9.9 12.7l-2.4 1.9M8.6 8.7 5.9 7.9M15.4 8.7l2.7-.8"
+              stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"
             />
           </svg>
           VAROnChain
@@ -45,23 +32,19 @@ export function Navbar() {
           <a href="#how" className="hidden transition-colors hover:text-text sm:inline">
             How it works
           </a>
-          <a href="#proof" className="hidden transition-colors hover:text-text md:inline">
-            Live Demo
-          </a>
+         
           <a
-            href="https://txline.txodds.com/documentation/quickstart"
+            href="https://t.me/varonchainbot?start=sub_18237038"
             target="_blank"
             rel="noreferrer"
-            className="hidden transition-colors hover:text-text md:inline"
+            className="hidden items-center gap-1.5 transition-colors hover:text-text sm:inline-flex"
           >
-            Docs
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+              <path d="M21.94 4.36 18.6 20.2c-.25 1.13-.9 1.4-1.83.87l-5.06-3.73-2.44 2.35c-.27.27-.5.5-1.02.5l.37-5.16 9.4-8.5c.41-.36-.09-.56-.63-.2L6.6 12.63l-5.02-1.57c-1.09-.34-1.11-1.09.23-1.6L20.5 3.05c.9-.34 1.7.2 1.44 1.31Z" />
+            </svg>
+            Telegram
           </a>
-          <Link
-            href="/app"
-            className="rounded-md bg-accent px-4 py-2 font-sans text-xs font-extrabold text-bg normal-case tracking-normal transition-shadow glow-accent-hover"
-          >
-            Launch App
-          </Link>
+         <StartWatchingButton className="rounded-full bg-accent px-8 py-3.5 text-sm font-extrabold text-bg transition-shadow glow-accent-hover" />
         </nav>
       </div>
     </header>

@@ -1,10 +1,10 @@
 const STATS = [
-  { value: "2026 FIFA", label: "World Cup covered" },
-  { value: "validateStatV2", label: "on-chain proof" },
-  { value: "Solana devnet", label: "anchored" },
-  { value: "Free tier", label: "no TxL required" },
-  { value: "SSE stream", label: "real-time events" },
-  { value: "Merkle root", label: "per match batch" },
+  { value: "104 matches", label: "across the 2026 World Cup" },
+  { value: "100% free", label: "no fees, ever" },
+  { value: "Real-time", label: "goals the second they happen" },
+  { value: "Every event verified", label: "not just claimed" },
+  { value: "Built on Solana", label: "for real, checkable proof" },
+  { value: "One tap", label: "to unlock the live feed" },
 ];
 
 function StatsRow() {

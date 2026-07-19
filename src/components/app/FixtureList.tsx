@@ -97,11 +97,11 @@ function OddsBar({ odds }: { odds: MatchOdds }) {
         ))}
       </div>
       {/* Labels */}
-      <div className="mt-1.5 flex justify-between">
+      <div className="mt-2 flex justify-between">
         {segments.map((s) => (
-          <span key={s.label} className="font-mono text-[10px] text-text-dimmer">
-            <span className="text-text-dim">{s.label}</span>{" "}
-            {s.pct.toFixed(0)}%
+          <span key={s.label} className="text-[11px] text-text-dim">
+            <span className="font-semibold text-text">{s.label}</span>{" "}
+            <span className="font-mono">{s.pct.toFixed(0)}%</span>
           </span>
         ))}
       </div>
@@ -115,13 +115,13 @@ function StatusPill({ phase }: { phase: MatchPhase }) {
   if (!phase) return null;
   if (!phase.live) {
     return (
-      <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-text-dimmer">
+      <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-text-dim">
         FT
       </span>
     );
   }
   return (
-    <span className="flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent-dim px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-accent">
+    <span className="flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent-dim px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent">
       <span className="h-1 w-1 animate-pulse-dot rounded-full bg-accent" />
       {phase.label === "Half time" ? "HT" : "Live"}
     </span>
@@ -262,7 +262,7 @@ function FixtureCard({
           {/* Kickoff time — always shown regardless of live/FT status,
               not just while the fixture is still scheduled. */}
           {fx.StartTime != null && (
-            <p className="mt-0.5 font-mono text-[10px] text-text-dimmer">
+            <p className="mt-1 text-xs text-text-dim">
               Kickoff {formatKickoff(fx.StartTime)}
             </p>
           )}
@@ -289,22 +289,22 @@ function FixtureCard({
         </div>
       )}
       {!oddsLoading && !odds && (
-        <p className="mt-3 font-mono text-[10px] text-text-dimmer">
+        <p className="mt-3 text-xs text-text-dim">
           {phase?.label === "Full time" ? "Odds closed" : "Odds not posted yet"}
         </p>
       )}
 
       <div className="mt-4 flex items-center justify-between">
         <span
-          className={`font-mono text-[10px] uppercase tracking-widest ${
-            isSelected ? "text-accent/70" : "text-text-dimmer group-hover:text-text-dim"
+          className={`font-mono text-[11px] ${
+            isSelected ? "text-accent/70" : "text-text-dim group-hover:text-text"
           }`}
         >
           #{id}
         </span>
         <span
-          className={`font-mono text-[10px] uppercase tracking-widest transition-colors ${
-            isSelected || isMatchOfTheDay ? "text-accent" : "text-text-dimmer group-hover:text-accent"
+          className={`text-xs font-semibold transition-colors ${
+            isSelected || isMatchOfTheDay ? "text-accent" : "text-text-dim group-hover:text-accent"
           }`}
         >
           {isSelected ? "● Tracking" : "Track Match →"}
@@ -344,9 +344,9 @@ export function FixtureList({
   return (
     <div className="w-full">
       <div className="flex items-center gap-3">
-        <p className="font-mono text-xs uppercase tracking-widest text-text-dim">
+        <h2 className="font-display text-2xl font-bold text-text">
           World Cup Fixtures
-        </p>
+        </h2>
         {loading && (
           <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
         )}
@@ -369,9 +369,10 @@ export function FixtureList({
       {matchOfTheDay && (
         <div className="mt-6 mb-6">
           <div className="mb-3 flex items-center gap-2">
-            <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-accent">
-              ★ Match of the Day
-            </span>
+            <span className="text-lg">★</span>
+            <h3 className="font-display text-lg font-bold text-accent">
+              Match of the Day
+            </h3>
           </div>
           <FixtureCard
             fx={matchOfTheDay}
@@ -387,7 +388,12 @@ export function FixtureList({
         </div>
       )}
 
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {displayedFixtures && displayedFixtures.length > 0 && (
+        <h3 className="mb-3 font-display text-lg font-bold text-text">
+         Previous Matches
+        </h3>
+      )}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {displayedFixtures?.map((fx, i) => {
           const indexOffset = i + 1; // Since we sliced off the first item
           const id = fixtureId(fx, indexOffset);
@@ -410,7 +416,7 @@ export function FixtureList({
           <button
             type="button"
             onClick={() => setShowAll((v) => !v)}
-            className="rounded-full border border-border px-5 py-2 font-mono text-[11px] uppercase tracking-widest text-text-dim transition-colors hover:border-border-hover hover:text-text"
+            className="rounded-full border border-border px-5 py-2 text-xs font-semibold uppercase tracking-wide text-text-dim transition-colors hover:border-border-hover hover:text-text"
           >
             {showAll
               ? `Show less`
@@ -421,7 +427,7 @@ export function FixtureList({
 
       {/* Manual fixture ID input */}
       <div className="mt-6">
-        <p className="font-mono text-[10px] uppercase tracking-widest text-text-dimmer">
+        <p className="text-xs text-text-dim">
           Or track by fixture ID
         </p>
         <form

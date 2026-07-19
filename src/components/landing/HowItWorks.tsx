@@ -3,11 +3,11 @@ import { Reveal } from "./Reveal";
 const STEPS = [
   {
     tag: "01",
-    title: "Data in",
-    body: "TxODDS feeds live match events straight from the stadium — no broadcast lag.",
+    title: "Connect your wallet",
+    body: "One free tap with no payment and no signup form. you need just a wallet, so we know where will send your feed to.",
     icon: (
       <path
-        d="M4 12a8 8 0 0116 0M7 12a5 5 0 0110 0M12 12v8m0 0l-3-3m3 3l3-3"
+        d="M4 8a2 2 0 012-2h11a2 2 0 012 2v1h-3a3 3 0 000 6h3v1a2 2 0 01-2 2H6a2 2 0 01-2-2V8zM16 12h1"
         stroke="currentColor"
         strokeWidth="1.6"
         strokeLinecap="round"
@@ -17,8 +17,8 @@ const STEPS = [
   },
   {
     tag: "02",
-    title: "On-chain proof",
-    body: "Every batch is hashed into a Merkle root and anchored to Solana in real time.",
+    title: "We check every event",
+    body: "The moment a goal, card, or sub happens, it's checked and locked so nothing can be faked or changed after the fact.",
     icon: (
       <path
         d="M9 12a3 3 0 106 0 3 3 0 00-6 0zM4 7l3 2m10-2l-3 2M4 17l3-2m10 2l-3-2"
@@ -31,11 +31,25 @@ const STEPS = [
   },
   {
     tag: "03",
-    title: "Fan sees it",
-    body: "A verified event card lands in your feed — proof attached, not promised.",
+    title: "You see it live",
+    body: "A verified event lands in your feed with proof attached, not promised. Share it, or just watch the match unfold.",
     icon: (
       <path
         d="M7 3h10a1 1 0 011 1v16a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1zM10 18h4"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    ),
+  },
+  {
+    tag: "04",
+    title: "Or predict what's next",
+    body: "Guess the next goal, card, corner, or penalty before it happens. Free to play, points tracked on a live leaderboard.",
+    icon: (
+      <path
+        d="M12 3v4M12 17v4M3 12h4M17 12h4M7 7l2.5 2.5M17 7l-2.5 2.5M7 17l2.5-2.5M17 17l-2.5-2.5"
         stroke="currentColor"
         strokeWidth="1.6"
         strokeLinecap="round"
@@ -49,7 +63,7 @@ export function HowItWorks() {
   return (
     <section id="how" className="border-b border-border">
       <div
-        className="mx-auto max-w-6xl px-6 py-20"
+        className="mx-auto max-w-7xl px-6 py-20"
         style={{
           backgroundImage:
             "linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px)",
@@ -63,7 +77,7 @@ export function HowItWorks() {
           </p>
         </Reveal>
 
-        <div className="mt-10 grid grid-cols-1 gap-8 sm:grid-cols-3 sm:gap-4">
+        <div className="mt-10 grid grid-cols-1 gap-8 sm:grid-cols-2 sm:gap-6 lg:grid-cols-4 lg:gap-4">
           {STEPS.map((step, i) => (
             <Reveal key={step.tag} delayMs={i * 120} className="relative">
               {i < STEPS.length - 1 && (

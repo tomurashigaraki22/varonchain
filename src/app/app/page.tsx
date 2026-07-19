@@ -13,6 +13,7 @@ import { PredictionGame } from "@/components/app/PredictionGame";
 import { CrowdPulseTrader } from "@/components/app/CrowdPulseTrader";
 import { LineupPanel } from "@/components/app/LineupPanel";
 import { GoalCelebration, type CelebrationPayload } from "@/components/app/GoalCelebration";
+import { StadiumBackground } from "@/components/landing/StadiumBackground";
 import { useFixtures, type Fixture } from "@/lib/hooks/useFixtures";
 import { useActivationStatus } from "@/lib/hooks/useActivationStatus";
 import { extractPhase } from "@/lib/txline/scoreSoccer";
@@ -80,53 +81,61 @@ export default function AppPage() {
     <div className="flex min-h-screen flex-col bg-bg">
       <AppNavbar />
 
-      {/* Hero — dot grid + glow */}
-      <div className="relative overflow-hidden bg-dot-grid">
-        <div className="absolute inset-0 bg-hero-glow" aria-hidden />
-        <div className="relative mx-auto max-w-4xl px-6 pt-12 pb-14 sm:pt-16 sm:pb-18">
-          <span className="inline-flex items-center rounded-full border border-accent/30 px-3 py-1 font-mono text-[10px] font-semibold uppercase tracking-widest text-accent">
-            {activated ? "02 — Select fixture" : "01 — Connect"}
-          </span>
-          <h1 className="mt-4 font-display text-[clamp(1.75rem,5vw,3rem)] font-bold leading-tight tracking-tight text-text">
-            {activated ? (
-              <>World Cup <span className="text-accent">Live Data</span></>
-            ) : (
-              <>Activate the free <span className="text-accent">World Cup</span> data feed</>
-            )}
+      {/* Hero — stadium scene, matching the landing page, tighter rhythm, fan-first copy */}
+      <div className="relative overflow-hidden">
+        <StadiumBackground />
+        <div className="relative mx-auto max-w-7xl px-6 pt-8 pb-8 sm:pt-10 sm:pb-10">
+          <h1 className="font-display text-[clamp(1.75rem,4vw,2.75rem)] font-bold leading-tight tracking-tight text-text">
+            Every goal. <span className="text-accent">Verified live.</span>
           </h1>
-          <p className="mt-3 max-w-lg text-sm leading-relaxed text-text-dim">
-            {activated
-              ? "Select a fixture below to open the live verified feed — every goal and card checked against a Solana-anchored Merkle root."
-              : "Connect a devnet wallet and subscribe on-chain. No payment, no KYC — just the Solana fee for the one-time subscribe transaction."}
+          <p className="mt-2 max-w-xl text-sm leading-relaxed text-text-dim">
+            Follow every World Cup match as it happens — goals, cards, subs, all live. Tap any big
+            moment to see the proof behind it, backed by real match data.
           </p>
-          <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 font-mono text-[11px] uppercase tracking-wide text-text-dim">
-            <span>Solana-anchored</span>
-            <span className="text-border">·</span>
-            <span>Merkle verified</span>
-            <span className="text-border">·</span>
-            <span>Real-time stream</span>
-          </div>
+
+          {/* Technical detail — present but no longer the headline */}
+          <details className="mt-4 max-w-xl">
+            <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-widest text-text-dimmer hover:text-text-dim">
+              How the verification works ⓘ
+            </summary>
+            <p className="mt-2 font-mono text-[11px] leading-relaxed text-text-dimmer">
+              Every match event is checked against a Solana-anchored Merkle root — a
+              cryptographic proof, not a claim. Free to use, no crypto experience required.
+            </p>
+          </details>
         </div>
       </div>
 
-      <main className="mx-auto w-full max-w-4xl flex-1 px-6 pb-16 pt-8">
-        <div className="flex flex-col gap-8">
+      <main className="mx-auto w-full max-w-7xl flex-1 px-6 pb-16 pt-6">
+        <div className="flex flex-col gap-6">
 
           {/* While checking cookies — show a subtle skeleton so no flash */}
           {isChecking && (
             <div className="flex items-center gap-3 rounded-xl border border-border bg-surface px-5 py-4">
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-              <span className="text-sm text-text-dim">Checking session…</span>
+              <span className="text-sm text-text-dim">Just a sec…</span>
             </div>
           )}
 
-          {/* Activation panel — only show once we know they are NOT activated */}
+          {/* Activation — a compact, non-blocking strip. Fans can browse matches
+              below without connecting anything; a wallet is only needed to
+              unlock the live feed + verify moments, and it's introduced right
+              where that value actually shows up rather than as a gate up front.
+              (Most fans will already be activated via the landing page's
+              Start Watching modal — this is the fallback for anyone who lands
+              here directly.) */}
           {!isChecking && !activated && (
-            <div className="animate-fade-up">
-              <ActivationPanel
-                onActivated={() => setLocalActivated(true)}
-                onTxSig={setTxSig}
-              />
+            <div className="animate-fade-up rounded-xl border border-border bg-surface px-5 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-text">Want live scores + verified moments?</p>
+                  <p className="mt-0.5 text-xs text-text-dim">One free tap unlocks the live feed — no crypto knowledge needed.</p>
+                </div>
+                <ActivationPanel
+                  onActivated={() => setLocalActivated(true)}
+                  onTxSig={setTxSig}
+                />
+              </div>
             </div>
           )}
 
@@ -137,8 +146,7 @@ export default function AppPage() {
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent font-mono text-[10px] font-bold text-bg">
                   ✓
                 </span>
-                <span className="text-sm font-medium text-accent">TxLINE active</span>
-                <span className="text-sm text-text-dim">— Free World Cup tier</span>
+                <span className="text-sm font-medium text-accent">Live feed unlocked</span>
               </div>
               {txSig && (
                 <a
@@ -147,7 +155,7 @@ export default function AppPage() {
                   rel="noreferrer"
                   className="hidden font-mono text-xs text-accent underline-offset-4 hover:underline sm:inline"
                 >
-                  View tx ↗
+                  Proof of unlock ↗
                 </a>
               )}
             </div>
@@ -156,12 +164,12 @@ export default function AppPage() {
           {/* Match of the day / favourite upcoming match */}
           {activated && <FeaturedMatch fixtures={fixtures} onSelect={handleSelectFixture} />}
 
-          {/* Fixtures */}
+          {/* Fixtures — always shown so fans can see what's on, even before unlocking */}
           <FixtureList
-            active={activated}
+            active={true}
             fixtures={fixtures}
-            loading={loading}
-            error={error}
+            loading={activated ? loading : false}
+            error={activated ? error : null}
             selectedFixtureId={selectedFixture?.id}
             onSelect={handleSelectFixture}
           />
